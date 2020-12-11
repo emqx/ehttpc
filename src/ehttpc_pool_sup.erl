@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(ecpool_pool_sup).
+-module(ehttpc_pool_sup).
 
 -behaviour(supervisor).
 

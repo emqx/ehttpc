@@ -22,6 +22,8 @@
 -export([start_link/2]).
 
 -export([ info/1
+        , start_pool/2
+        , stop_pool/1
         , pick_worker/1
         , pick_worker/2]).
 
@@ -50,6 +52,12 @@ start_link(Pool, Opts) ->
 -spec(info(pid()) -> list()).
 info(Pid) ->
     gen_server:call(Pid, info).
+
+start_pool(Pool, Opts) when is_atom(Pool) ->
+    ehttpc_sup:start_pool(Pool, Opts).
+
+stop_pool(Pool) when is_atom(Pool) ->
+    ehttpc_sup:stop_pool(Pool).
 
 pick_worker(Pool) ->
     gproc_pool:pick_worker(Pool).
