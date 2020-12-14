@@ -24,6 +24,8 @@
 -export([ start_link/3
         , request/3
         , request/4
+        , workers/1
+        , name/1
         ]).
 
 %% gen_server callbacks
@@ -36,7 +38,7 @@
         ]).
 
 -record(state, {
-          pool      :: ecpool:poo_name(),
+          pool      :: term(),
           id        :: pos_integer(),
           client    :: pid() | undefined,
           mref      :: reference() | undefined,
@@ -59,6 +61,11 @@ request(Worker, Method, Req) ->
 request(Worker, Method, Req, Timeout) ->
     gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000).
 
+workers(Pool) ->
+    gproc_pool:active_workers(name(Pool)).
+
+name(Pool) -> {?MODULE, Pool}.
+
 %%--------------------------------------------------------------------
 %% gen_server callbacks
 %%--------------------------------------------------------------------
@@ -72,7 +79,7 @@ init([Pool, Id, Opts]) ->
                    port = proplists:get_value(port, Opts),
                    gun_opts = gun_opts(Opts),
                    gun_state = down},
-    true = gproc_pool:connect_worker(Pool, {Pool, Id}),
+    true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
     {ok, State}.
 
 handle_call(Req = {_, _, _}, From, State = #state{client = undefined, gun_state = down}) ->
@@ -127,7 +134,7 @@ handle_info(Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{pool = Pool, id = Id}) ->
-    gropc_pool:disconnect_worker(Pool, {Pool, Id}),
+    gproc_pool:disconnect_worker(ehttpc:name(Pool), {Pool, Id}),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

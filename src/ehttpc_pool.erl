@@ -44,7 +44,7 @@
 %% API
 %%--------------------------------------------------------------------
 
--spec(start_link(ecpool:pool_name(), list(ecpool:option()))
+-spec(start_link(ehttpc:pool_name(), list(ehttpc:option()))
       -> {ok, pid()} | {error, term()}).
 start_link(Pool, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Opts], []).
@@ -60,10 +60,10 @@ stop_pool(Pool) when is_atom(Pool) ->
     ehttpc_sup:stop_pool(Pool).
 
 pick_worker(Pool) ->
-    gproc_pool:pick_worker(Pool).
+    gproc_pool:pick_worker(ehttpc:name(Pool)).
 
 pick_worker(Pool, Value) ->
-    gproc_pool:pick_worker(Pool, Value).
+    gproc_pool:pick_worker(ehttpc:name(Pool), Value).
 
 %%--------------------------------------------------------------------
 %% gen_server callbacks
@@ -73,15 +73,15 @@ init([Pool, Opts]) ->
     Schedulers = erlang:system_info(schedulers),
     PoolSize = get_value(pool_size, Opts, Schedulers),
     PoolType = get_value(pool_type, Opts, random),
-    ok = ensure_pool(ecpool:name(Pool), PoolType, [{size, PoolSize}]),
+    ok = ensure_pool(ehttpc:name(Pool), PoolType, [{size, PoolSize}]),
     ok = lists:foreach(
            fun(I) ->
-                   ensure_pool_worker(ecpool:name(Pool), {Pool, I}, I)
+                   ensure_pool_worker(ehttpc:name(Pool), {Pool, I}, I)
            end, lists:seq(1, PoolSize)),
     {ok, #state{name = Pool, size = PoolSize, type = PoolType}}.
 
 handle_call(info, _From, State = #state{name = Pool, size = Size, type = Type}) ->
-    Workers = ecpool:workers(Pool),
+    Workers = ehttpc:workers(Pool),
     Info = [{pool_name, Pool},
             {pool_size, Size},
             {pool_type, Type},
@@ -103,9 +103,9 @@ handle_info(Info, State) ->
 terminate(_Reason, #state{name = Pool, size = Size}) ->
     lists:foreach(
       fun(I) ->
-              gproc_pool:remove_worker(ecpool:name(Pool), {Pool, I})
+              gproc_pool:remove_worker(ehttpc:name(Pool), {Pool, I})
       end, lists:seq(1, Size)),
-    gproc_pool:delete(ecpool:name(Pool)).
+    gproc_pool:delete(ehttpc:name(Pool)).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
