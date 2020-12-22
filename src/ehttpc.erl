@@ -18,8 +18,6 @@
 
 -behaviour(gen_server).
 
--include_lib("emqx/include/logger.hrl").
-
 %% APIs
 -export([ start_link/3
         , request/3
@@ -36,6 +34,8 @@
         , terminate/2
         , code_change/3
         ]).
+
+-define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
 
 -record(state, {
           pool      :: term(),
@@ -187,7 +187,7 @@ do_request(Client, delete, {Path, Headers}) ->
 await_response(StreamRef, Timeout, State = #state{client = Client, mref = MRef}) ->
     receive
         {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
-            {reply, {ok, StatusCode, Headers}};
+            {reply, {ok, StatusCode, Headers}, State};
         {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
             await_body(StreamRef, Timeout, {StatusCode, Headers, <<>>}, State);
         {gun_error, Client, StreamRef, Reason} ->
