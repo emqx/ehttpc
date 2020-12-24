@@ -23,6 +23,8 @@
         , request/3
         , request/4
         , workers/1
+        , get_client/1
+        , simple_request/4
         , name/1
         ]).
 
@@ -36,6 +38,9 @@
         ]).
 
 -define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
+
+-define(RESPONSE(Status, Body, Headers), {response, Status, Body, Headers}).
+-define(T_WAITUP, infinity).
 
 -record(state, {
           pool      :: term(),
@@ -54,6 +59,34 @@
 
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
+
+simple_request(Worker, Method, Req, Timeout) ->
+    case get_client(Worker) of
+        {error, Reason} -> {error, Reason};
+        {ok, ConnPid, MRef} ->
+            StreamRef = do_request(ConnPid, Method, Req),
+            await_response(ConnPid, StreamRef, Timeout, MRef)
+    end.
+
+await_response(ConnPid, StreamRef, Timeout, MRef) ->
+    case gun:await(ConnPid, StreamRef, Timeout, MRef) of
+        {error, Reason} ->
+            ?LOG(error, "await reply failed: ~p", [Reason]),
+            {error, Reason};
+        {response, fin, Status, Headers} ->
+            {ok, ?RESPONSE(Status, <<>>, Headers)};
+        {response, nofin, Status, Headers} ->
+            case gun:await_body(ConnPid, StreamRef, Timeout, MRef) of
+                {ok, Body} ->
+                    {ok, ?RESPONSE(Status, Body, Headers)};
+                {error, Reason} ->
+                    ?LOG(error, "await response body failed: ~p", [Reason]),
+                    {error, Reason}
+            end
+    end.
+
+get_client(Worker) ->
+    gen_server:call(Worker, get_client).
 
 request(Worker, Method, Req) ->
     request(Worker, Method, Req, 5000).
@@ -78,32 +111,18 @@ init([Pool, Id, Opts]) ->
                    host = proplists:get_value(host, Opts),
                    port = proplists:get_value(port, Opts),
                    gun_opts = gun_opts(Opts),
-                   gun_state = down},
+                   gun_state = down
+                   },
     true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
+    self() ! try_connect,
     {ok, State}.
 
-handle_call(Req = {_, _, _}, From, State = #state{client = undefined, gun_state = down}) ->
-    case open(State) of
-        {ok, NewState} ->
-            handle_call(Req, From, NewState);
-        {error, Reason} ->
-            {reply, {error, Reason}, State}
-    end;
+handle_call(get_client, _From, State = #state{client = undefined}) ->
+    self() ! try_connect,
+    {reply, {error, conn_down}, State};
 
-handle_call(Req = {_, _, Timeout}, From, State = #state{client = Client, mref = MRef, gun_state = down}) when is_pid(Client) ->
-    case gun:await_up(Client, Timeout, MRef) of
-        {ok, _} ->
-            handle_call(Req, From, State#state{gun_state = up});
-        {error, timeout} ->
-            {reply, {error, timeout}, State};
-        {error, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            {reply, {error, Reason}, State#state{client = undefined, mref = undefined}}
-    end;
-
-handle_call({Method, Request, Timeout}, _From, State = #state{client = Client, gun_state = up}) when is_pid(Client) ->
-    StreamRef = do_request(Client, Method, Request),
-    await_response(StreamRef, Timeout, State);
+handle_call(get_client, _From, State = #state{client = Client, mref = MRef}) ->
+    {reply, {ok, Client, MRef}, State};
 
 handle_call(Req, _From, State) ->
     ?LOG(error, "Unexpected call: ~p", [Req]),
@@ -113,24 +132,39 @@ handle_cast(Msg, State) ->
     ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
+handle_info(try_connect, State = #state{
+                host = Host, port = Port,
+                gun_opts = GunOpts, client = undefined}) ->
+    case gun:open(Host, Port, GunOpts) of
+        {ok, ConnPid} when is_pid(ConnPid) ->
+            MRef = monitor(process, ConnPid),
+            ?LOG(warning, "connected to ~p successfully, gun: ~p",
+                [{Host, Port}, ConnPid]),
+            {noreply, State#state{mref = MRef, client = ConnPid}};
+        {error, Reason} ->
+            ?LOG(error, "try connect to ~p failed, reason: ~p",
+                [{Host, Port}, Reason]),
+            {noreply, State}
+    end;
+handle_info(try_connect, State) ->
+    {noreply, State};
+
 handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
+    ?LOG(warning, "gun connection ~p up", [Client]),
     {noreply, State#state{gun_state = up}};
 
-handle_info({gun_down, Client, _, _Reason, _, _}, State = #state{client = Client}) ->
+handle_info({gun_down, Client, _, Reason, _, _}, State) ->
+    ?LOG(warning, "gun connection ~p down: ~p", [Client, Reason]),
     {noreply, State#state{gun_state = down}};
 
 handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client}) ->
     true = erlang:demonitor(MRef, [flush]),
-    case open(State) of
-        {ok, NewState} ->
-            {noreply, NewState};
-        {error, Reason} ->
-            %% TODO: print warning log
-            {noreply, State#state{mref = undefined, client = undefined}}
-    end;
+    ?LOG(warning, "gun pid down: ~p, ~p", [Client, Reason]),
+    erlang:send_after(2000, self(), try_connect),
+    {noreply, State#state{mref = undefined, client = undefined}};
 
 handle_info(Info, State) ->
-    ?LOG(error, "Unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p, State: ~0p", [Info, State]),
     {noreply, State}.
 
 terminate(_Reason, #state{pool = Pool, id = Id}) ->
@@ -143,15 +177,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
-
-open(State = #state{host = Host, port = Port, gun_opts = GunOpts}) ->
-    case gun:open(Host, Port, GunOpts) of
-        {ok, ConnPid} when is_pid(ConnPid) ->
-            MRef = monitor(process, ConnPid),
-            {ok, State#state{mref = MRef, client = ConnPid}};
-        {error, Reason} ->
-            {error, Reason}
-    end.
 
 gun_opts(Opts) ->
     gun_opts(Opts, #{retry => 5,
@@ -183,37 +208,3 @@ do_request(Client, put, {Path, Headers, Body}) ->
     gun:put(Client, Path, Headers, Body);
 do_request(Client, delete, {Path, Headers}) ->
     gun:delete(Client, Path, Headers).
-
-await_response(StreamRef, Timeout, State = #state{client = Client, mref = MRef}) ->
-    receive
-        {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
-            {reply, {ok, StatusCode, Headers}, State};
-        {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
-            await_body(StreamRef, Timeout, {StatusCode, Headers, <<>>}, State);
-        {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
-        {'DOWN', MRef, process, Client, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            {reply, {error, Reason}, State#state{client = undefined, mref = undefiend}}
-    after Timeout ->
-        gun:cancel(Client, StreamRef),
-        {reply, {error, timeout}, State}
-    end.
-
-await_body(StreamRef, Timeout, {StatusCode, Headers, Acc}, State = #state{client = Client, mref = MRef}) ->
-    receive
-        {gun_data, Client, StreamRef, fin, Data} ->
-            {reply, {ok, StatusCode, Headers, << Acc/binary, Data/binary >>}, State};
-        {gun_data, Client, StreamRef, nofin, Data} ->
-            await_body(StreamRef, Timeout, {StatusCode, Headers, << Acc/binary, Data/binary >>}, State);
-        % {gun_error, Client, StreamRef, {closed, _}} ->
-        %     todo;
-        {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
-        {'DOWN', MRef, process, Client, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            {reply, {error, Reason}, State#state{client = undefined, mref = undefiend}}
-    after Timeout ->
-        gun:cancel(Client, StreamRef),
-        {reply, {error, timeout}, State}
-    end.
