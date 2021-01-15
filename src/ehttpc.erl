@@ -60,7 +60,7 @@ request(Worker, Method, Req) ->
     request(Worker, Method, Req, 5000).
 
 request(Worker, Method, Req, Timeout) ->
-    gen_server:call(Worker, {Method, Req, Timeout}, infinity).
+    gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000).
 
 workers(Pool) ->
     gproc_pool:active_workers(name(Pool)).
