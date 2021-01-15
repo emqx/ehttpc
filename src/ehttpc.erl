@@ -135,7 +135,7 @@ handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State
                     {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpirationTime, {StatusCode, Headers, <<>>}}}}}
             end;
         _ ->
-            ?LOG(error, "Received 'gun_response' message does not match the state"),
+            ?LOG(error, "Received 'gun_response' message does not match the state", []),
             {noreply, State}
     end;
 
@@ -158,7 +158,7 @@ handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = 
                     {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpirationTime, {StatusCode, Headers, <<Acc/binary, Data/binary>>}}}}}
             end;
         _ ->
-            ?LOG(error, "Received 'gun_data' message does not match the state"),
+            ?LOG(error, "Received 'gun_data' message does not match the state", []),
             {noreply, State}
     end;
 
