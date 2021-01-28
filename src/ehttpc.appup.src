@@ -1,12 +1,18 @@
 %% -*-: erlang -*-
-{"0.1.1",
+{"0.1.2",
    [
+     {"0.1.1", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
      {"0.1.0", [
        {code_change, up, [{ehttpc, []}]}
      ]},
      {<<".*">>, []}
    ],
    [
+     {"0.1.1", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
      {"0.1.0", [
        {code_change, down, [{ehttpc, []}]}
      ]},
