@@ -22,6 +22,7 @@
 -export([ start_link/3
         , request/3
         , request/4
+        , request/5
         , workers/1
         , name/1
         ]).
@@ -57,10 +58,22 @@ start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
 request(Worker, Method, Req) ->
-    request(Worker, Method, Req, 5000).
+    request(Worker, Method, Req, 5000, 3).
 
 request(Worker, Method, Req, Timeout) ->
-    gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000).
+    request(Worker, Method, Req, Timeout, 3).
+
+request(_Worker, _Method, _Req, _Timeout, 0) ->
+    {error, normal};
+request(Worker, Method, Req, Timeout, Retry) ->
+    case gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000) of
+        {error, normal} ->
+            request(Worker, Method, Req, Timeout, Retry - 1);
+        {error, Reason} ->
+            {error, Reason};
+        Other ->
+            Other
+    end.
 
 workers(Pool) ->
     gproc_pool:active_workers(name(Pool)).
