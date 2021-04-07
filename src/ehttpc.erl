@@ -36,6 +36,9 @@
         , code_change/3
         ]).
 
+%% test
+-export([maybe_ipv6/3]).
+
 -define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
 
 -record(state, {
@@ -240,7 +243,8 @@ code_change("0.1.0", {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunSta
 %% Internal functions
 %%--------------------------------------------------------------------
 
-open(State = #state{host = Host, port = Port, gun_opts = GunOpts}) ->
+open(State = #state{host = Host, port = Port, gun_opts = GunOpts0}) ->
+    GunOpts = maybe_ipv6(Host, Port, GunOpts0),
     case gun:open(Host, Port, GunOpts) of
         {ok, ConnPid} when is_pid(ConnPid) ->
             MRef = monitor(process, ConnPid),
@@ -270,6 +274,39 @@ gun_opts([{transport_opts, TransportOpts} | Opts], Acc) ->
     gun_opts(Opts, Acc#{transport_opts => TransportOpts});
 gun_opts([_ | Opts], Acc) ->
     gun_opts(Opts, Acc).
+
+maybe_ipv6(Host, Port, #{transport_opts := TransportOpts} = Opts) ->
+    Opts#{transport_opts := maybe_ipv6_1(Host, Port, TransportOpts)};
+maybe_ipv6(_Host, _Port, Opts) ->
+    Opts.
+
+maybe_ipv6_1(Host, Port, Opts) ->
+    case lists:member(inet, Opts) orelse lists:member(inet6, Opts) of
+        true -> Opts; %% user has made the decision
+        false -> maybe_ipv6_2(Host, Port, Opts)
+    end.
+
+maybe_ipv6_2(Host, _Port, Opts) when is_tuple(Host) ->
+    %% ip tuple provided
+    case tuple_size(Host) of
+        4 -> [inet | Opts];
+        8 -> [inet6 | Opts]
+    end;
+maybe_ipv6_2(Host, Port, Opts) ->
+    case inet:parse_address(Host) of
+        {ok, Ip} -> maybe_ipv6_2(Ip, Port, Opts); %% ip string provided
+        {error, einval} -> maybe_ipv6_3(Host, Port, Opts)
+    end.
+
+maybe_ipv6_3(Host, Port, Opts) ->
+    case gen_tcp:connect(Host, Port, [inet6], 5000) of
+        {ok, Sock} ->
+            %% ipv6 reachable at Host:Port
+            _ = gen_tcp:close(Sock),
+            [inet6 | Opts];
+        _ ->
+            [inet | Opts]
+    end.
 
 do_request(Client, get, {Path, Headers}) ->
     gun:get(Client, Path, Headers);

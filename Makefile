@@ -17,7 +17,10 @@ clean:
 	@$(REBAR) clean
 
 ct:
-	@$(REBAR) ct
+	@$(REBAR) ct -v -c
+
+eunit:
+	@$(REBAR) eunit -v -c
 
 cover:
 	@$(REBAR) cover
