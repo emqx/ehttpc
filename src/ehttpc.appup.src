@@ -1,7 +1,10 @@
 %% -*-: erlang -*-
-{"0.1.4",
+{"0.1.5",
    [
-     {<<"0.1.[1-3]">>, [
+     {"0.1.4", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
+     {<<"0.1.[1-2]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
      {"0.1.0", [
@@ -10,7 +13,10 @@
      {<<".*">>, []}
    ],
    [
-     {<<"0.1.[1-3]">>, [
+     {"0.1.4", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
+     {<<"0.1.[1-2]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
      {"0.1.0", [
