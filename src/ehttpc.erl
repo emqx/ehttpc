@@ -194,12 +194,8 @@ handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
     {noreply, State#state{gun_state = up}};
 
 handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests}) ->
-    case Reason of
-        normal -> ok;
-        closed -> ok;
-        _ ->
-            ?LOG(info, "Received gun_down with ~p", [Reason])
-    end,
+    Level = decide_log_level_by_reason(Reason),
+    ?LOG(Level, "Received gun_down with ~p", [Reason]),
     Now = erlang:system_time(millisecond),
     NRequests = lists:foldl(fun(StreamRef, Acc) ->
                                 case maps:take(StreamRef, Acc) of
@@ -215,12 +211,8 @@ handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{clie
     {noreply, State#state{gun_state = down, requests = NRequests}};
 
 handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests}) ->
-    case Reason of
-        normal -> ok;
-        closed -> ok;
-        _ ->
-            ?LOG(info, "The process of gun exited due to ~p", [Reason])
-    end,
+    Level = decide_log_level_by_reason(Reason),
+    ?LOG(Level, "The process of gun exited due to ~p", [Reason]),
     true = erlang:demonitor(MRef, [flush]),
     Now = erlang:system_time(millisecond),
     lists:foreach(fun({_, {_, ExpirationTime, _}}) when Now > ExpirationTime ->
@@ -303,3 +295,10 @@ flush_stream(Client, StreamRef) ->
 	after 0 ->
 		ok
 	end.
+
+decide_log_level_by_reason(normal) ->
+    debug;
+decide_log_level_by_reason(closed) ->
+    debug;
+decide_log_level_by_reason(_) ->
+    warning.
