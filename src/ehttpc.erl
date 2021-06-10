@@ -66,7 +66,7 @@ request(Worker, Method, Req, Timeout) ->
 request(_Worker, _Method, _Req, _Timeout, 0) ->
     {error, normal};
 request(Worker, Method, Req, Timeout, Retry) ->
-    case gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000) of
+    try gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
         {error, normal} ->
@@ -75,6 +75,9 @@ request(Worker, Method, Req, Timeout, Retry) ->
             {error, Reason};
         Other ->
             Other
+    catch
+        exit:{timeout, _Details} ->
+            {error, timeout}
     end.
 
 workers(Pool) ->
