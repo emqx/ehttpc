@@ -57,20 +57,31 @@
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
-request(Worker, Method, Req) ->
-    request(Worker, Method, Req, 5000, 3).
+request(Pool, Method, Request) when is_atom(Pool) ->
+    request(Pool, Method, Request, 5000, 3);
 
-request(Worker, Method, Req, Timeout) ->
-    request(Worker, Method, Req, Timeout, 3).
+request({Pool, KeyOrNum}, Method, Request) when is_atom(Pool) ->
+    request({Pool, KeyOrNum}, Method, Request, 5000, 3).
 
-request(_Worker, _Method, _Req, _Timeout, 0) ->
+request(Pool, Method, Request, Timeout) when is_atom(Pool) ->
+    request(Pool, Method, Request, Timeout, 3);
+
+request({Pool, KeyOrNum}, Method, Request, Timeout) when is_atom(Pool) ->
+    request({Pool, KeyOrNum}, Method, Request, Timeout, 3).
+
+request(Pool, Method, Request, Timeout, Retry) when is_atom(Pool) ->
+    request(ehttpc_pool:pick_worker(Pool), Method, Request, Timeout, Retry);
+request({Pool, KeyOrNum}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
+    request(ehttpc_pool:pick_worker(Pool, KeyOrNum), Method, Request, Timeout, Retry);
+
+request(Worker, _Method, _Req, _Timeout, 0) when is_pid(Worker) ->
     {error, normal};
-request(Worker, Method, Req, Timeout, Retry) ->
-    try gen_server:call(Worker, {Method, Req, Timeout}, Timeout + 1000) of
+request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
+    try gen_server:call(Worker, {Method, Request, Timeout}, Timeout + 1000) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
         {error, normal} ->
-            request(Worker, Method, Req, Timeout, Retry - 1);
+            request(Worker, Method, Request, Timeout, Retry - 1);
         {error, Reason} ->
             {error, Reason};
         Other ->
@@ -102,18 +113,18 @@ init([Pool, Id, Opts]) ->
     true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
     {ok, State}.
 
-handle_call(Req = {_, _, _}, From, State = #state{client = undefined, gun_state = down}) ->
+handle_call(Request = {_, _, _}, From, State = #state{client = undefined, gun_state = down}) ->
     case open(State) of
         {ok, NewState} ->
-            handle_call(Req, From, NewState);
+            handle_call(Request, From, NewState);
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
 
-handle_call(Req = {_, _, Timeout}, From, State = #state{client = Client, mref = MRef, gun_state = down}) when is_pid(Client) ->
+handle_call(Request = {_, _, Timeout}, From, State = #state{client = Client, mref = MRef, gun_state = down}) when is_pid(Client) ->
     case gun:await_up(Client, Timeout, MRef) of
         {ok, _} ->
-            handle_call(Req, From, State#state{gun_state = up});
+            handle_call(Request, From, State#state{gun_state = up});
         {error, timeout} ->
             {reply, {error, timeout}, State};
         {error, Reason} ->
@@ -126,8 +137,8 @@ handle_call({Method, Request, Timeout}, From, State = #state{client = Client, re
     ExpirationTime = erlang:system_time(millisecond) + Timeout,
     {noreply, State#state{requests = maps:put(StreamRef, {From, ExpirationTime, undefined}, Requests)}};
 
-handle_call(Req, _From, State) ->
-    ?LOG(error, "Unexpected call: ~p", [Req]),
+handle_call(Request, _From, State) ->
+    ?LOG(error, "Unexpected call: ~p", [Request]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
@@ -256,8 +267,7 @@ gun_opts(Opts) ->
     gun_opts(Opts, #{retry => 5,
                      retry_timeout => 1000,
                      connect_timeout => 5000,
-                     protocols => [http],
-                     http_opts => #{keepalive => infinity}}).
+                     protocols => [http]}).
 
 gun_opts([], Acc) ->
     Acc;
@@ -267,6 +277,8 @@ gun_opts([{retry_timeout, RetryTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{retry_timeout => RetryTimeout});
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
+gun_opts([{keepalive, Keepalive} | Opts], Acc) ->
+    gun_opts(Opts, Acc#{http_opts => #{keepalive => Keepalive}});
 gun_opts([{transport, Transport} | Opts], Acc) ->
     gun_opts(Opts, Acc#{transport => Transport});
 gun_opts([{transport_opts, TransportOpts} | Opts], Acc) ->
