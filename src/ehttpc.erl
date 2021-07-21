@@ -253,10 +253,14 @@ terminate(_Reason, #state{pool = Pool, id = Id}) ->
     gproc_pool:disconnect_worker(ehttpc:name(Pool), {Pool, Id}),
     ok.
 
-code_change({down, "0.1.0"}, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, _}, _Extra) ->
+code_change({down, "0.1.0"}, {state, Pool, ID, Client, MRef, Host, Port, _, GunOpts, GunState, _}, _Extra) ->
     {ok, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState}};
+code_change({down, _}, {state, Pool, ID, Client, MRef, Host, Port, _, GunOpts, GunState, Requests}, _Extra) ->
+    {ok, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, Requests}};
 code_change("0.1.0", {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState}, _Extra) ->
-    {ok, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, #{}}}.
+    {ok, {state, Pool, ID, Client, MRef, Host, Port, true, GunOpts, GunState, #{}}};
+code_change(_, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, Requests}, _Extra) ->
+    {ok, {state, Pool, ID, Client, MRef, Host, Port, true, GunOpts, GunState, Requests}}.
 
 %%--------------------------------------------------------------------
 %% Internal functions
