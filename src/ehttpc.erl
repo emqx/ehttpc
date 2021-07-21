@@ -216,7 +216,7 @@ handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
     {noreply, State#state{gun_state = up}};
 
 handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests}) ->
-    ?LOG(warning, "Received 'gun_down' message with reason: ~p", [Reason]),
+    Reason =/= normal andalso Reason =/= closed andalso ?LOG(warning, "Received 'gun_down' message with reason: ~p", [Reason]),
     Now = erlang:system_time(millisecond),
     NRequests = lists:foldl(fun(StreamRef, Acc) ->
                                 case maps:take(StreamRef, Acc) of
