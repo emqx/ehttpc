@@ -58,14 +58,14 @@
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
-request(Pool, Method, Request) when is_atom(Pool) ->
-    request(Pool, Method, Request, 5000, 3);
+request(PoolOrWorker, Method, Request) ->
+    request(PoolOrWorker, Method, Request, 5000, 3);
 
-request({Pool, KeyOrNum}, Method, Request) when is_atom(Pool) ->
+request({Pool, KeyOrNum}, Method, Request) ->
     request({Pool, KeyOrNum}, Method, Request, 5000, 3).
 
-request(Pool, Method, Request, Timeout) when is_atom(Pool) ->
-    request(Pool, Method, Request, Timeout, 3);
+request(PoolOrWorker, Method, Request, Timeout) ->
+    request(PoolOrWorker, Method, Request, Timeout, 3);
 
 request({Pool, KeyOrNum}, Method, Request, Timeout) when is_atom(Pool) ->
     request({Pool, KeyOrNum}, Method, Request, Timeout, 3).
@@ -74,7 +74,6 @@ request(Pool, Method, Request, Timeout, Retry) when is_atom(Pool) ->
     request(ehttpc_pool:pick_worker(Pool), Method, Request, Timeout, Retry);
 request({Pool, KeyOrNum}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
     request(ehttpc_pool:pick_worker(Pool, KeyOrNum), Method, Request, Timeout, Retry);
-
 request(Worker, _Method, _Req, _Timeout, 0) when is_pid(Worker) ->
     {error, normal};
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
