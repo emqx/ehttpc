@@ -154,7 +154,9 @@ handle_cast(Msg, State) ->
     ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State = #state{client = Client, requests = Requests}) ->
+handle_info({gun_response, Client, _StreamRef, _IsFin, _StatusCode, _Headers}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
     Now = erlang:system_time(millisecond),
     case maps:take(StreamRef, Requests) of
         error ->
@@ -176,7 +178,9 @@ handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State
             {noreply, State}
     end;
 
-handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = Client, requests = Requests}) ->
+handle_info({gun_data, Client, _StreamRef, _IsFin, _Data}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
     Now = erlang:system_time(millisecond),
     case maps:take(StreamRef, Requests) of
         error ->
@@ -198,7 +202,9 @@ handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = 
             {noreply, State}
     end;
 
-handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Client, requests = Requests}) ->
+handle_info({gun_error, Client, _StreamRef, _Reason}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
     Now = erlang:system_time(millisecond),
     case maps:take(StreamRef, Requests) of
         error ->
@@ -214,7 +220,9 @@ handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Clie
 handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
     {noreply, State#state{gun_state = up}};
 
-handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests}) ->
+handle_info({gun_down, Client, _, _Reason, _KilledStreams, _}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State#state{gun_state = down, requests = #{}}};
+handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
     Reason =/= normal andalso Reason =/= closed andalso ?LOG(warning, "Received 'gun_down' message with reason: ~p", [Reason]),
     Now = erlang:system_time(millisecond),
     NRequests = lists:foldl(fun(StreamRef, Acc) ->
@@ -230,14 +238,19 @@ handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{clie
                             end, Requests, KilledStreams),
     {noreply, State#state{gun_state = down, requests = NRequests}};
 
-handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests}) ->
+handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests, enable_pipelining = EnablePipelining}) ->
     true = erlang:demonitor(MRef, [flush]),
-    Now = erlang:system_time(millisecond),
-    lists:foreach(fun({_, {_, ExpirationTime, _}}) when Now > ExpirationTime ->
-                      ok;
-                     ({_, {From, _, _}}) ->
-                      gen_server:reply(From, {error, Reason})
-                  end, maps:to_list(Requests)),
+    case EnablePipelining of
+        true ->
+            Now = erlang:system_time(millisecond),
+            lists:foreach(fun({_, {_, ExpirationTime, _}}) when Now > ExpirationTime ->
+                              ok;
+                             ({_, {From, _, _}}) ->
+                              gen_server:reply(From, {error, Reason})
+                          end, maps:to_list(Requests));
+        false ->
+            ok
+    end,
     case open(State#state{requests = #{}}) of
         {ok, NewState} ->
             {noreply, NewState};
