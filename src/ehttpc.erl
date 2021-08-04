@@ -77,7 +77,8 @@ request({Pool, KeyOrNum}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
 request(Worker, _Method, _Req, _Timeout, 0) when is_pid(Worker) ->
     {error, normal};
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
-    try gen_server:call(Worker, {Method, Request, Timeout}, Timeout + 1000) of
+    ExpireAt = now_() + Timeout,
+    try gen_server:call(Worker, {Method, Request, ExpireAt}, Timeout + 1000) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
         {error, normal} ->
@@ -122,28 +123,32 @@ handle_call(Request = {_, _, _}, From, State = #state{client = undefined, gun_st
             {reply, {error, Reason}, State}
     end;
 
-handle_call(Request = {_, _, Timeout}, From, State = #state{client = Client, mref = MRef, gun_state = down}) when is_pid(Client) ->
-    case gun:await_up(Client, Timeout, MRef) of
-        {ok, _} ->
-            handle_call(Request, From, State#state{gun_state = up});
-        {error, timeout} ->
-            {reply, {error, timeout}, State};
-        {error, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            {reply, {error, Reason}, State#state{client = undefined, mref = undefined}}
+handle_call(Request = {_, _, ExpireAt}, From, State = #state{client = Client, mref = MRef, gun_state = down}) when is_pid(Client) ->
+    case (Timeout = ExpireAt - now_()) > 0 of
+        true ->
+            case gun:await_up(Client, Timeout, MRef) of
+                {ok, _} ->
+                    handle_call(Request, From, State#state{gun_state = up});
+                {error, timeout} ->
+                    {reply, {error, timeout}, State};
+                {error, Reason} ->
+                    true = erlang:demonitor(MRef, [flush]),
+                    {reply, {error, Reason}, State#state{client = undefined, mref = undefined}}
+            end;
+        false ->
+            {noreply, State}
     end;
 
-handle_call({Method, Request, Timeout}, From, State = #state{client = Client,
-                                                             requests = Requests,
-                                                             enable_pipelining = EnablePipelining,
-                                                             gun_state = up}) when is_pid(Client) ->
+handle_call({Method, Request, ExpireAt}, From, State = #state{client = Client,
+                                                              requests = Requests,
+                                                              enable_pipelining = EnablePipelining,
+                                                              gun_state = up}) when is_pid(Client) ->
     StreamRef = do_request(Client, Method, Request),
     case EnablePipelining of
         true ->
-            ExpirationTime = erlang:system_time(millisecond) + Timeout,
-            {noreply, State#state{requests = maps:put(StreamRef, {From, ExpirationTime, undefined}, Requests)}};
+            {noreply, State#state{requests = maps:put(StreamRef, {From, ExpireAt, undefined}, Requests)}};
         false ->
-            await_response(StreamRef, Timeout, State)
+            await_response(StreamRef, ExpireAt, State)
     end;
 
 handle_call(Request, _From, State) ->
@@ -154,57 +159,63 @@ handle_cast(Msg, State) ->
     ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State = #state{client = Client, requests = Requests}) ->
-    Now = erlang:system_time(millisecond),
+handle_info({gun_response, Client, _StreamRef, _IsFin, _StatusCode, _Headers}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_response, Client, StreamRef, IsFin, StatusCode, Headers}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
+    Now = now_(),
     case maps:take(StreamRef, Requests) of
         error ->
             ?LOG(error, "Received 'gun_response' message from unknown stream ref: ~p", [StreamRef]),
             {noreply, State};
-        {{_, ExpirationTime, _}, NRequests} when Now > ExpirationTime ->
+        {{_, ExpireAt, _}, NRequests} when Now > ExpireAt ->
             cancel_stream(Client, StreamRef),
             {noreply, State#state{requests = NRequests}};
-        {{From, ExpirationTime, undefined}, NRequests} ->
+        {{From, ExpireAt, undefined}, NRequests} ->
             case IsFin of
                 fin ->
                     gen_server:reply(From, {ok, StatusCode, Headers}),
                     {noreply, State#state{requests = NRequests}};
                 nofin ->
-                    {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpirationTime, {StatusCode, Headers, <<>>}}}}}
+                    {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpireAt, {StatusCode, Headers, <<>>}}}}}
             end;
         _ ->
             ?LOG(error, "Received 'gun_response' message does not match the state", []),
             {noreply, State}
     end;
 
-handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = Client, requests = Requests}) ->
-    Now = erlang:system_time(millisecond),
+handle_info({gun_data, Client, _StreamRef, _IsFin, _Data}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_data, Client, StreamRef, IsFin, Data}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
+    Now = now_(),
     case maps:take(StreamRef, Requests) of
         error ->
             ?LOG(error, "Received 'gun_data' message from unknown stream ref: ~p", [StreamRef]),
             {noreply, State};
-        {{_, ExpirationTime, _}, NRequests} when Now > ExpirationTime ->
+        {{_, ExpireAt, _}, NRequests} when Now > ExpireAt ->
             cancel_stream(Client, StreamRef),
             {noreply, State#state{requests = NRequests}};
-        {{From, ExpirationTime, {StatusCode, Headers, Acc}}, NRequests} ->
+        {{From, ExpireAt, {StatusCode, Headers, Acc}}, NRequests} ->
             case IsFin of
                 fin ->
                     gen_server:reply(From, {ok, StatusCode, Headers, <<Acc/binary, Data/binary>>}),
                     {noreply, State#state{requests = NRequests}};
                 nofin ->
-                    {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpirationTime, {StatusCode, Headers, <<Acc/binary, Data/binary>>}}}}}
+                    {noreply, State#state{requests = NRequests#{StreamRef => {From, ExpireAt, {StatusCode, Headers, <<Acc/binary, Data/binary>>}}}}}
             end;
         _ ->
             ?LOG(error, "Received 'gun_data' message does not match the state", []),
             {noreply, State}
     end;
 
-handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Client, requests = Requests}) ->
-    Now = erlang:system_time(millisecond),
+handle_info({gun_error, Client, _StreamRef, _Reason}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State};
+handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
+    Now = now_(),
     case maps:take(StreamRef, Requests) of
         error ->
             ?LOG(error, "Received 'gun_error' message from unknown stream ref: ~p~n", [StreamRef]),
             {noreply, State};
-        {{_, ExpirationTime, _}, NRequests} when Now > ExpirationTime ->
+        {{_, ExpireAt, _}, NRequests} when Now > ExpireAt ->
             {noreply, State#state{requests = NRequests}};
         {{From, _, _}, NRequests} ->
             gen_server:reply(From, {error, Reason}),
@@ -214,14 +225,16 @@ handle_info({gun_error, Client, StreamRef, Reason}, State = #state{client = Clie
 handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
     {noreply, State#state{gun_state = up}};
 
-handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests}) ->
+handle_info({gun_down, Client, _, _Reason, _KilledStreams, _}, State = #state{client = Client, enable_pipelining = false}) ->
+    {noreply, State#state{gun_state = down, requests = #{}}};
+handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{client = Client, requests = Requests, enable_pipelining = true}) ->
     Reason =/= normal andalso Reason =/= closed andalso ?LOG(warning, "Received 'gun_down' message with reason: ~p", [Reason]),
-    Now = erlang:system_time(millisecond),
+    Now = now_(),
     NRequests = lists:foldl(fun(StreamRef, Acc) ->
                                 case maps:take(StreamRef, Acc) of
                                     error ->
                                         Acc;
-                                    {{_, ExpirationTime, _}, NAcc} when Now > ExpirationTime ->
+                                    {{_, ExpireAt, _}, NAcc} when Now > ExpireAt ->
                                         NAcc;
                                     {{From, _, _}, NAcc} ->
                                         gen_server:reply(From, {error, Reason}),
@@ -230,14 +243,19 @@ handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{clie
                             end, Requests, KilledStreams),
     {noreply, State#state{gun_state = down, requests = NRequests}};
 
-handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests}) ->
+handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests, enable_pipelining = EnablePipelining}) ->
     true = erlang:demonitor(MRef, [flush]),
-    Now = erlang:system_time(millisecond),
-    lists:foreach(fun({_, {_, ExpirationTime, _}}) when Now > ExpirationTime ->
-                      ok;
-                     ({_, {From, _, _}}) ->
-                      gen_server:reply(From, {error, Reason})
-                  end, maps:to_list(Requests)),
+    case EnablePipelining of
+        true ->
+            Now = now_(),
+            lists:foreach(fun({_, {_, ExpireAt, _}}) when Now > ExpireAt ->
+                              ok;
+                             ({_, {From, _, _}}) ->
+                              gen_server:reply(From, {error, Reason})
+                          end, maps:to_list(Requests));
+        false ->
+            ok
+    end,
     case open(State#state{requests = #{}}) of
         {ok, NewState} ->
             {noreply, NewState};
@@ -323,58 +341,59 @@ flush_stream(Client, StreamRef) ->
 		ok
 	end.
 
-await_response(StreamRef, Timeout, State = #state{client = Client}) ->
-    Start = erlang:system_time(millisecond),
-    receive
-        {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
-            {reply, {ok, StatusCode, Headers}, State};
-        {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
-            RemainingTime = remaining_time(Timeout, erlang:system_time(millisecond) - Start),
-            await_remaining_response(StreamRef, RemainingTime, State, {StatusCode, Headers, <<>>});
-        {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
-        {gun_down, Client, _, Reason, _KilledStreams, _} ->
-            {reply, {error, Reason}, State};
-        {'DOWN', MRef, process, Client, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            NState = case open(State) of
-                         {ok, State1} -> State1;
-                         {error, _Reason} -> State#state{mref = undefined, client = undefined}
-                     end,
-            {reply, {error, Reason}, NState}
-    after Timeout ->
-        cancel_stream(Client, StreamRef),
-        {reply, {error, timeout}, State}
+await_response(StreamRef, ExpireAt, State = #state{client = Client}) ->
+    case (Timeout = ExpireAt - now_()) > 0 of
+        true ->
+            receive
+                {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
+                    {reply, {ok, StatusCode, Headers}, State};
+                {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
+                    await_remaining_response(StreamRef, ExpireAt, State, {StatusCode, Headers, <<>>});
+                {gun_error, Client, StreamRef, Reason} ->
+                    {reply, {error, Reason}, State};
+                {gun_down, Client, _, Reason, _KilledStreams, _} ->
+                    {reply, {error, Reason}, State};
+                {'DOWN', MRef, process, Client, Reason} ->
+                    true = erlang:demonitor(MRef, [flush]),
+                    NState = case open(State) of
+                                {ok, State1} -> State1;
+                                {error, _Reason} -> State#state{mref = undefined, client = undefined}
+                            end,
+                    {reply, {error, Reason}, NState}
+            after Timeout ->
+                cancel_stream(Client, StreamRef),
+                {reply, {error, timeout}, State}
+            end;
+        false ->
+            {noreply, State}
     end.
 
-await_remaining_response(StreamRef, Timeout, State = #state{client = Client}, _) when Timeout < 0 ->
-    cancel_stream(Client, StreamRef),
-    {reply, {error, timeout}, State};
-await_remaining_response(StreamRef, Timeout, State = #state{client = Client, mref = MRef}, {StatusCode, Headers, Acc}) ->
-    Start = erlang:system_time(millisecond),
-    receive
-        {gun_data, Client, StreamRef, fin, Data} ->
-            {reply, {ok, StatusCode, Headers, <<Acc/binary, Data/binary>>}, State};
-        {gun_data, Client, StreamRef, nofin, Data} ->
-            RemainingTime = remaining_time(Timeout, erlang:system_time(millisecond) - Start),
-            await_remaining_response(StreamRef, RemainingTime, State, {StatusCode, Headers, <<Acc/binary, Data/binary>>});
-        {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
-        {gun_down, Client, _, Reason, _KilledStreams, _} ->
-            {reply, {error, Reason}, State};
-        {'DOWN', MRef, process, Client, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
-            NState = case open(State) of
-                         {ok, State1} -> State1;
-                         {error, _Reason} -> State#state{mref = undefined, client = undefined}
-                     end,
-            {reply, {error, Reason}, NState}
-    after Timeout ->
-        cancel_stream(Client, StreamRef),
-        {reply, {error, timeout}, State}
+await_remaining_response(StreamRef, ExpireAt, State = #state{client = Client, mref = MRef}, {StatusCode, Headers, Acc}) ->
+    case (Timeout = ExpireAt - now_()) > 0 of
+        true ->
+            receive
+                {gun_data, Client, StreamRef, fin, Data} ->
+                    {reply, {ok, StatusCode, Headers, <<Acc/binary, Data/binary>>}, State};
+                {gun_data, Client, StreamRef, nofin, Data} ->
+                    await_remaining_response(StreamRef, ExpireAt, State, {StatusCode, Headers, <<Acc/binary, Data/binary>>});
+                {gun_error, Client, StreamRef, Reason} ->
+                    {reply, {error, Reason}, State};
+                {gun_down, Client, _, Reason, _KilledStreams, _} ->
+                    {reply, {error, Reason}, State};
+                {'DOWN', MRef, process, Client, Reason} ->
+                    true = erlang:demonitor(MRef, [flush]),
+                    NState = case open(State) of
+                                {ok, State1} -> State1;
+                                {error, _Reason} -> State#state{mref = undefined, client = undefined}
+                            end,
+                    {reply, {error, Reason}, NState}
+            after Timeout ->
+                cancel_stream(Client, StreamRef),
+                {reply, {error, timeout}, State}
+            end;
+        false ->
+            {noreply, State}
     end.
 
-remaining_time(Total, Spend) when Total > Spend ->
-    Total - Spend;
-remaining_time(_Total, _Spend) ->
-    0.
+now_() ->
+    erlang:system_time(millisecond).
