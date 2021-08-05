@@ -297,6 +297,9 @@ gun_opts(Opts) ->
     gun_opts(Opts, #{retry => 5,
                      retry_timeout => 1000,
                      connect_timeout => 5000,
+                     %% The keepalive mechanism of gun will send "\r\n" for keepalive,
+                     %% which may cause misjudgment by some servers, so we disabled it by default
+                     http_opts => #{keepalive => infinity},
                      protocols => [http]}).
 
 gun_opts([], Acc) ->
@@ -307,8 +310,6 @@ gun_opts([{retry_timeout, RetryTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{retry_timeout => RetryTimeout});
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
-gun_opts([{keepalive, Keepalive} | Opts], Acc) ->
-    gun_opts(Opts, Acc#{http_opts => #{keepalive => Keepalive}});
 gun_opts([{transport, Transport} | Opts], Acc) ->
     gun_opts(Opts, Acc#{transport => Transport});
 gun_opts([{transport_opts, TransportOpts} | Opts], Acc) ->
@@ -365,6 +366,7 @@ await_response(StreamRef, ExpireAt, State = #state{client = Client}) ->
                 {reply, {error, timeout}, State}
             end;
         false ->
+            cancel_stream(Client, StreamRef),
             {noreply, State}
     end.
 
@@ -392,6 +394,7 @@ await_remaining_response(StreamRef, ExpireAt, State = #state{client = Client, mr
                 {reply, {error, timeout}, State}
             end;
         false ->
+            cancel_stream(Client, StreamRef),
             {noreply, State}
     end.
 
