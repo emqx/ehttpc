@@ -108,7 +108,7 @@ init([Pool, Id, Opts]) ->
                    mref = undefined,
                    host = proplists:get_value(host, Opts),
                    port = proplists:get_value(port, Opts),
-                   enable_pipelining = proplists:get_value(enable_pipelining, Opts, true),
+                   enable_pipelining = proplists:get_value(enable_pipelining, Opts, false),
                    gun_opts = gun_opts(Opts),
                    gun_state = down,
                    requests = #{}},
