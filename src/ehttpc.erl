@@ -81,10 +81,13 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
     try gen_server:call(Worker, {Method, Request, ExpireAt}, Timeout + 1000) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
-        {error, normal} ->
-            request(Worker, Method, Request, Timeout, Retry - 1);
         {error, Reason} ->
-            {error, Reason};
+            case Retry =:= 0 of
+                true ->
+                    {error, Reason};
+                false ->
+                    request(Worker, Method, Request, Timeout, Retry - 1)
+            end;
         Other ->
             Other
     catch
