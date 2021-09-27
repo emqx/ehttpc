@@ -58,40 +58,31 @@
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
-request(PoolOrWorker, Method, Request) ->
-    request(PoolOrWorker, Method, Request, 5000, 3);
+request(Pool, Method, Request) ->
+    request(Pool, Method, Request, 5000, 3).
 
-request({Pool, KeyOrNum}, Method, Request) ->
-    request({Pool, KeyOrNum}, Method, Request, 5000, 3).
-
-request(PoolOrWorker, Method, Request, Timeout) ->
-    request(PoolOrWorker, Method, Request, Timeout, 3);
-
-request({Pool, KeyOrNum}, Method, Request, Timeout) when is_atom(Pool) ->
-    request({Pool, KeyOrNum}, Method, Request, Timeout, 3).
+request(Pool, Method, Request, Timeout) ->
+    request(Pool, Method, Request, Timeout, 3).
 
 request(Pool, Method, Request, Timeout, Retry) when is_atom(Pool) ->
     request(ehttpc_pool:pick_worker(Pool), Method, Request, Timeout, Retry);
-request({Pool, KeyOrNum}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
-    request(ehttpc_pool:pick_worker(Pool, KeyOrNum), Method, Request, Timeout, Retry);
-request(Worker, _Method, _Req, _Timeout, 0) when is_pid(Worker) ->
-    {error, normal};
+
+request({Pool, N}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
+    request(ehttpc_pool:pick_worker(Pool, N), Method, Request, Timeout, Retry);
+
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
     ExpireAt = now_() + Timeout,
     try gen_server:call(Worker, {Method, Request, ExpireAt}, Timeout + 1000) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
-        {error, Reason} ->
-            case Retry =:= 0 of
-                true ->
-                    {error, Reason};
-                false ->
-                    request(Worker, Method, Request, Timeout, Retry - 1)
-            end;
+        {error, Reason} when Retry =< 1 ->
+            {error, Reason};
+        {error, _} ->
+            request(Worker, Method, Request, Timeout, Retry - 1);
         Other ->
             Other
     catch
-        exit:{timeout, _Details} ->
+        exit : {timeout, _Details} ->
             {error, timeout}
     end.
 
