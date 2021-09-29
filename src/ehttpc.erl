@@ -96,6 +96,7 @@ name(Pool) -> {?MODULE, Pool}.
 %%--------------------------------------------------------------------
 
 init([Pool, Id, Opts]) ->
+    process_flag(trap_exit, true),
     State = #state{pool = Pool,
                    id = Id,
                    client = undefined,
