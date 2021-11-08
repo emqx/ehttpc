@@ -23,3 +23,13 @@ app_vsn_test() ->
     {ok, [{application, ehttpc, Props}]} = file:consult("src/ehttpc.app.src"),
     Vsn = proplists:get_value(vsn, Props),
     ?assertEqual(Vsn, AppupVsn).
+
+ensure_vsn_bump_test() ->
+    TagV = parse_semver(os:cmd("git describe --tags")),
+    {ok, [{application, ehttpc, Props}]} = file:consult("src/ehttpc.app.src"),
+    V = parse_semver(proplists:get_value(vsn, Props)),
+    ?assert(TagV =< V).
+
+parse_semver(Str) ->
+    [Major, Minor, Patch | _] = string:tokens(Str, ".-"),
+    {list_to_integer(Major), list_to_integer(Minor), list_to_integer(Patch)}.
