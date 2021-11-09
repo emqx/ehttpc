@@ -10,13 +10,17 @@ jobs:
 
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     container:
-      image: erlang:22.0.7
+      image: "ghcr.io/emqx/emqx-builder/5.0:24.1.1-emqx-1-ubuntu20.04"
 
     steps:
     - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1000
+    - name: Fetch tags
+      run: git fetch --tags
     - name: Compile
       run: rebar3 compile
     - name: Run tests
