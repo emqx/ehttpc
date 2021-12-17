@@ -25,3 +25,5 @@ jobs:
       run: rebar3 compile
     - name: Run tests
       run: rebar3 do eunit
+    - name: Ensure version consistency
+      run: ./check_vsns.escript
