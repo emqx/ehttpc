@@ -106,7 +106,7 @@ terminate(_Reason, #state{name = Pool, size = Size}) ->
       fun(I) ->
               gproc_pool:remove_worker(ehttpc:name(Pool), {Pool, I})
       end, lists:seq(1, Size)),
-    gproc_pool:delete(ehttpc:name(Pool)).
+    gproc_pool:force_delete(ehttpc:name(Pool)).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
