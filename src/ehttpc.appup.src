@@ -1,5 +1,5 @@
 %% -*-: erlang -*-
-{"0.1.14",
+{"0.1.15",
    [
      {<<"0\\.1\\\.[0-7]">>, [
        {update, ehttpc, {advanced, []}},
@@ -7,6 +7,9 @@
      ]},
      {<<"0\\.1\\.([8-9]|(1[0-3]))">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
+     ]},
+     {"0.1.14", [
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
      {<<".*">>, []}
@@ -22,6 +25,9 @@
      ]},
      {<<"0\\.1\\.([8-9]|(1[0-3]))">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
+     ]},
+     {"0.1.14", [
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
      {<<".*">>, []}
