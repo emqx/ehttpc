@@ -127,7 +127,7 @@ handle_call(Request = {_, _, ExpireAt}, From, State = #state{client = Client, mr
                 {error, timeout} ->
                     {reply, {error, timeout}, State};
                 {error, Reason} ->
-                    true = erlang:demonitor(MRef, [flush]),
+                    true = demon(MRef),
                     {reply, {error, Reason}, State#state{client = undefined, mref = undefined}}
             end;
         false ->
@@ -244,7 +244,7 @@ handle_info({gun_down, Client, _, Reason, KilledStreams, _}, State = #state{clie
     {noreply, State#state{gun_state = down, requests = NRequests}};
 
 handle_info({'DOWN', MRef, process, Client, Reason}, State = #state{mref = MRef, client = Client, requests = Requests, enable_pipelining = EnablePipelining}) ->
-    true = erlang:demonitor(MRef, [flush]),
+    ok = demon(MRef),
     case EnablePipelining of
         true ->
             Now = now_(),
@@ -354,7 +354,7 @@ await_response(StreamRef, ExpireAt, Timeout, State = #state{client = Client})
         {gun_down, Client, _, Reason, _KilledStreams, _} ->
             {reply, {error, Reason}, State};
         {'DOWN', MRef, process, Client, Reason} ->
-            true = erlang:demonitor(MRef, [flush]),
+            ok = demon(MRef),
             NState = case open(State) of
                         {ok, State1} -> State1;
                         {error, _Reason} -> State#state{mref = undefined, client = undefined}
@@ -378,7 +378,7 @@ await_remaining_response(StreamRef, ExpireAt, State = #state{client = Client, mr
                 {gun_down, Client, _, Reason, _KilledStreams, _} ->
                     {reply, {error, Reason}, State};
                 {'DOWN', MRef, process, Client, Reason} ->
-                    true = erlang:demonitor(MRef, [flush]),
+                    true = dmon(MRef, [flush]),
                     NState = case open(State) of
                                 {ok, State1} -> State1;
                                 {error, _Reason} -> State#state{mref = undefined, client = undefined}
@@ -395,3 +395,21 @@ await_remaining_response(StreamRef, ExpireAt, State = #state{client = Client, mr
 
 now_() ->
     erlang:system_time(millisecond).
+
+%% Improved version of erlang:demonitor(Ref, [flush]).
+%% Only try to receive the 'DOWN' messages when it might have been sent.
+-spec demon(reference()) -> ok.
+demon(Ref) when is_reference(Ref) ->
+    case erlang:demonitor(Ref, [info]) of
+        true ->
+            %% succeeded
+            ok;
+        _ ->
+            %% '_', but not 'false' because this may change in the future according to OTP doc
+            receive
+                {'DOWN', Ref, process, _, _} ->
+                    ok
+            after 0 ->
+                ok
+            end
+    end.
