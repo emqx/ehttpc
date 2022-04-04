@@ -27,3 +27,7 @@ edoc:
 
 dialyzer: compile
 	@$(REBAR) dialyzer
+
+eunit:
+	@$(REBAR) eunit -v -c
+	@$(REBAR) cover
