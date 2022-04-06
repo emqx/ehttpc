@@ -138,12 +138,17 @@ handle_call({Method, Request, ExpireAt}, From, State = #state{client = Client,
                                                               requests = Requests,
                                                               enable_pipelining = EnablePipelining,
                                                               gun_state = up}) when is_pid(Client) ->
-    StreamRef = do_request(Client, Method, Request),
-    case EnablePipelining of
+    case ExpireAt - now_() > 0 of
         true ->
-            {noreply, State#state{requests = maps:put(StreamRef, {From, ExpireAt, undefined}, Requests)}};
+            StreamRef = do_request(Client, Method, Request),
+            case EnablePipelining of
+                true ->
+                    {noreply, State#state{requests = maps:put(StreamRef, {From, ExpireAt, undefined}, Requests)}};
+                false ->
+                    await_response(StreamRef, ExpireAt, State)
+            end;
         false ->
-            await_response(StreamRef, ExpireAt, State)
+            {noreply, State}
     end;
 
 handle_call(Request, _From, State) ->
@@ -322,6 +327,7 @@ do_request(Client, delete, {Path, Headers}) ->
     gun:delete(Client, Path, Headers).
 
 cancel_stream(Client, StreamRef) ->
+    %% This a async call, which is why ehttpc occasionally prints '...unknown stream ref...' log
     gun:cancel(Client, StreamRef),
     flush_stream(Client, StreamRef).
 
