@@ -319,56 +319,58 @@ cancel_stream(Client, StreamRef) ->
     _ = gun:cancel(Client, StreamRef),
     ok.
 
-await_response(StreamRef, ExpireAt, Timeout0, State = #state{client = Client}) ->
-    Timeout = max(Timeout0, 0),
-    receive
-        {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
-           {reply, {ok, StatusCode, Headers}, State};
-        {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
-            await_remaining_response(StreamRef, ExpireAt, State, {StatusCode, Headers, <<>>});
-        {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
-        {gun_down, Client, _, Reason, _KilledStreams, _} ->
-            {reply, {error, Reason}, State};
-        {'DOWN', _MRef, process, Client, Reason} ->
-            NState = case open(State) of
-                        {ok, State1} -> State1;
-                        {error, _Reason} -> State#state{mref = undefined, client = undefined}
-                    end,
-            {reply, {error, Reason}, NState};
-        ?GEN_CALL_REQ(From, Call) ->
-            State1 = enqueue_req(From, Call, State),
-            %% keep waiting
-            await_response(StreamRef, ExpireAt, timeout(ExpireAt), State1)
-    after Timeout ->
-        ok = cancel_stream(Client, StreamRef),
-        {reply, {error, timeout}, State}
-    end.
+await(Client, StreamRef, ExpireAt, State) ->
+    await(Client, StreamRef, ExpireAt,
+          State, _StatusCode = 0, _Headers = [], _Data = []).
 
-await_remaining_response(StreamRef, ExpireAt, State = #state{client = Client}, {StatusCode, Headers, Acc}) ->
+await(Client, StreamRef, ExpireAt,
+      State, StatusCode0, Headers0, Data0) ->
     Timeout = timeout(ExpireAt),
     receive
+        {gun_inform, Client, StreamRef, StatusCode, Headers} ->
+            {{ok, StatusCode, Headers}, State};
+        {gun_response, Client, StreamRef, fin, StatusCode, Headers} ->
+           {{ok, StatusCode, Headers}, State};
+        {gun_response, Client, StreamRef, nofin, StatusCode, Headers} ->
+            %% more data
+            await(Client, StreamRef, ExpireAt,
+                  State, StatusCode, Headers, Data0);
         {gun_data, Client, StreamRef, fin, Data} ->
-            {reply, {ok, StatusCode, Headers, <<Acc/binary, Data/binary>>}, State};
+            {{ok, StatusCode0, Headers0, iolist_to_binary([Data0, Data])}, State};
         {gun_data, Client, StreamRef, nofin, Data} ->
-            await_remaining_response(StreamRef, ExpireAt, State, {StatusCode, Headers, <<Acc/binary, Data/binary>>});
+            %% more data
+            await(Client, StreamRef, ExpireAt,
+                  State, StatusCode0, Headers0, [Data0, Data]);
         {gun_error, Client, StreamRef, Reason} ->
-            {reply, {error, Reason}, State};
+            {{error, Reason}, State};
+        {gun_error, Client, Reason} ->
+            {{error, Reason}, State};
         {gun_down, Client, _, Reason, _KilledStreams, _} ->
-            {reply, {error, Reason}, State};
+            {{error, Reason}, State};
         {'DOWN', _MRef, process, Client, Reason} ->
-            NState = case open(State) of
-                         {ok, State1} -> State1;
-                         {error, _Reason} -> State#state{mref = undefined, client = undefined}
-                     end,
-            {reply, {error, Reason}, NState};
+            NewState =
+                case State of
+                    #state{} ->
+                        case open(State) of
+                            {ok, State1} ->
+                                State1;
+                            {error, _Reason} ->
+                                State#state{mref = undefined, client = undefined}
+                        end;
+                    _ ->
+                        State
+                end,
+            {{error, Reason}, NewState};
         ?GEN_CALL_REQ(From, Call) ->
-            State1 = enqueue_req(From, Call, State),
+            %% collect the call
+            #state{} = State, %% assert
+            NewState = enqueue_req(From, Call, State),
             %% keep waiting
-            await_remaining_response(StreamRef, ExpireAt, State1, {StatusCode, Headers, Acc})
+            await(Client, StreamRef, ExpireAt,
+                  NewState, StatusCode0, Headers0, Data0)
     after Timeout ->
         ok = cancel_stream(Client, StreamRef),
-        {reply, {error, timeout}, State}
+        {{error, timeout}, State}
     end.
 
 timeout(ExpireAt) ->
@@ -513,7 +515,7 @@ handle_req({Method, Request, ExpireAt}, From,
                           enable_pipelining = EnablePipelining,
                           gun_state = up}) when is_pid(Client) ->
     %% timedout already by the time when handing the call
-    case (Timeout = timeout(ExpireAt)) > 0 of
+    case timeout(ExpireAt) > 0 of
         true ->
             StreamRef = do_request(Client, Method, Request),
             case EnablePipelining of
@@ -522,7 +524,8 @@ handle_req({Method, Request, ExpireAt}, From,
                     Req = ?SENT_REQ(From, ExpireAt, ?undef),
                     {noreply, State#state{requests = put_sent_req(StreamRef, Req, Requests)}};
                 false ->
-                    await_response(StreamRef, ExpireAt, Timeout, State)
+                    {Reply, NewState} = await(Client, StreamRef, ExpireAt, State),
+                    {reply, Reply, NewState}
             end;
         false ->
             {noreply, State}
