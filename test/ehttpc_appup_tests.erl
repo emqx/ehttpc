@@ -48,16 +48,34 @@ ensuer_changelog_test() ->
         false -> error({missing_changelog_for_vsn, ExpectedChangeLogLine})
     end.
 
+ensure_version_bump_test() ->
+    Latest = lists:last(lists:sort([parse_semver(T) || T <- all_tags()])),
+    LatestTag = format_semver(Latest),
+    ChangedFiles = os:cmd("git diff --name-only " ++ LatestTag ++ "...HEAD src"),
+    case ChangedFiles of
+        [] ->
+            ok;
+        Other ->
+            io:format(user, "~nchanged since ~s:~n~p~n", [LatestTag, Other]),
+            error(need_version_bump)
+    end.
+
+format_semver({Major, Minor, Patch}) ->
+    lists:flatten(io_lib:format("~p.~p.~p", [Major, Minor, Patch])).
+
 parse_semver(Str) ->
-    [Major, Minor, Patch | _] = string:tokens(Str, ".-"),
+    [Major, Minor, Patch | _] = string:tokens(Str, ".-\n"),
     {list_to_integer(Major), list_to_integer(Minor), list_to_integer(Patch)}.
 
 all_tags() ->
     string:tokens(os:cmd("git tag"), "\n").
 
 git_tag_match_upgrade_vsn_test_() ->
-    {ok, [{_AppupVsn, Upgraes, Downgrades}]} = file:consult("src/ehttpc.appup.src"),
-    [{Tag, fun() -> true = has_a_match(Tag, Upgraes, Downgrades) end} || Tag <- all_tags()].
+    {ok, [{AppupVsn, Upgraes, Downgrades}]} = file:consult("src/ehttpc.appup.src"),
+    [
+        {Tag, fun() -> true = has_a_match(Tag, Upgraes, Downgrades) end}
+     || Tag <- all_tags(), Tag =/= AppupVsn
+    ].
 
 has_a_match(Tag, Ups, Downs) ->
     has_a_match(Tag, Ups) andalso
