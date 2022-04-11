@@ -18,3 +18,4 @@ _checkouts/
 
 rebar.lock
 rebar3.crashdump
+snabbkaffe/

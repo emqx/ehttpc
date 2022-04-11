@@ -2,14 +2,10 @@
 
 REBAR=rebar3
 
-all: deps compile xref
-
-deps:
-	@$(REBAR) get-deps
+all: compile eunit xref dialyzer
 
 compile:
 	@$(REBAR) compile
-
 xref:
 	@$(REBAR) xref
 
@@ -25,5 +21,9 @@ cover:
 edoc:
 	@$(REBAR) edoc
 
-dialyzer: compile
+dialyzer:
 	@$(REBAR) dialyzer
+
+eunit:
+	@$(REBAR) eunit -v -c
+	@$(REBAR) cover

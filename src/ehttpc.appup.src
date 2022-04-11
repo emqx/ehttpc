@@ -1,35 +1,33 @@
 %% -*-: erlang -*-
-{"0.1.15",
+{"0.2.0",
    [
      {<<"0\\.1\\\.[0-7]">>, [
        {update, ehttpc, {advanced, []}},
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
-     {<<"0\\.1\\.([8-9]|(1[0-3]))">>, [
-       {load_module, ehttpc, brutal_purge, soft_purge, []},
+     {<<"0\\.1\\.([8-9]|(1[0-4]))">>, [
+       {update, ehttpc, {advanced, []}},
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
-     {"0.1.14", [
-       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
-     ]},
-     {<<".*">>, []}
+     {"0.1.15", [
+       {update, ehttpc, {advanced, []}}
+     ]}
    ],
    [
      {<<"0\\.1\\.0">>, [
-       {update, ehttpc, {advanced, [no_requests, no_enable_pipelining]}},
+       {update, ehttpc, {advanced, [no_requests]}},
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
      {<<"0\\.1\\.[1-7]">>, [
        {update, ehttpc, {advanced, [no_enable_pipelining]}},
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
-     {<<"0\\.1\\.([8-9]|(1[0-3]))">>, [
-       {load_module, ehttpc, brutal_purge, soft_purge, []},
+     {<<"0\\.1\\.([8-9]|(1[0-4]))">>, [
+       {update, ehttpc, {advanced, [downgrade_requests]}},
        {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
      ]},
-     {"0.1.14", [
-       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
-     ]},
-     {<<".*">>, []}
+     {"0.1.15", [
+       {update, ehttpc, {advanced, [downgrade_requests]}}
+     ]}
    ]
 }.
