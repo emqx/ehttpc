@@ -478,24 +478,29 @@ should_cool_down(true, Sent) -> Sent >= 100;
 should_cool_down(false, Sent) -> Sent > 0;
 should_cool_down(N, Sent) when is_integer(N) -> Sent >= N.
 
+%% Continue droping expired requests, to avoid the state RAM usage
+%% explosion if http client can not keep up.
 drop_expired(#{pending_count := 0} = Requests) ->
     Requests;
-drop_expired(#{pending := Pending, pending_count := PC} = Requests) ->
-    PrioLatest = maps:get(prioritise_latest, Requests, false),
-    {value, ?PEND_REQ(_, ?REQ_CALL(_, _, ExpireAt))} =
-        case PrioLatest of
-            true -> queue:peek_r(Pending);
-            false -> queue:peek(Pending)
+drop_expired(Requests) ->
+    drop_expired(Requests, now_()).
+
+drop_expired(#{pending_count := 0} = Requests, _Now) ->
+    Requests;
+drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
+    {PeekFun, OutFun} =
+        case maps:get(prioritise_latest, Requests, false) of
+            true ->
+                {fun queue:peek_r/1, fun queue:out_r/1};
+            false ->
+                {fun queue:peek/1, fun queue:out/1}
         end,
-    case now_() > ExpireAt of
-        true when PrioLatest ->
-            {_, NewPendings} = queue:out_r(Pending),
-            NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
-            drop_expired(NewRequests);
+    {value, ?PEND_REQ(_, ?REQ_CALL(_, _, ExpireAt))} = PeekFun(Pending),
+    case Now > ExpireAt of
         true ->
-            {_, NewPendings} = queue:out(Pending),
+            {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
-            drop_expired(NewRequests);
+            drop_expired(NewRequests, Now);
         false ->
             Requests
     end.
@@ -588,17 +593,11 @@ shoot(
         gun_state = up
     }
 ) when is_pid(Client) ->
-    case timeout(ExpireAt) > 0 of
-        true ->
-            StreamRef = do_request(Client, Method, Request),
-            ?tp(shot, #{from => From, req => Request, reqs => Requests}),
-            %% no need for the payload
-            Req = ?SENT_REQ(From, ExpireAt, ?undef),
-            {noreply, State#state{requests = put_sent_req(StreamRef, Req, Requests)}};
-        false ->
-            %% timedout already by the time when handing the call
-            {noreply, State}
-    end.
+    StreamRef = do_request(Client, Method, Request),
+    ?tp(shot, #{from => From, req => Request, reqs => Requests}),
+    %% no need for the payload
+    Req = ?SENT_REQ(From, ExpireAt, ?undef),
+    {noreply, State#state{requests = put_sent_req(StreamRef, Req, Requests)}}.
 
 %% This is a copy of gun:wait_up/3
 %% with the '$gen_call' clause added so the calls in the mail box

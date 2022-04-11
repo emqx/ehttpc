@@ -41,8 +41,7 @@ send_10_test_() ->
     PoolOpts1 = pool_opts(Port1, false),
     PoolOpts2 = pool_opts(Port2, false),
     [
-        %% one-off server closes socket after data send, so we need to retry
-        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000, 1)) end},
+        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000, 0)) end},
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_sync(10)) end}
     ].
 
@@ -99,7 +98,7 @@ send_100_test_() ->
     PoolOpts1 = pool_opts(Port, false),
     PoolOpts2 = pool_opts(Port, true),
     [
-        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(100, 1000, 1)) end},
+        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(100, 1000, 0)) end},
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_async(100)) end}
     ].
 
@@ -179,23 +178,24 @@ requst_expire_test() ->
 server_outage_test_() ->
     Port = ?PORT,
     ServerName = ?FUNCTION_NAME,
-    ServerDelay = 300_000,
+    %% server delay for 5 seconds
+    ServerDelay = 5_000,
     F =
         fun() ->
-            %% ensure gun is connected to server
-            {error, timeout} = call(100),
-            %% now spawn a process which will never get a return value
-            {Pid, Ref} = spawn_monitor(fun() -> exit(call(100_000)) end),
+            %% spawn a process which will never get a 'ok' return
+            %% because server delays for 5 seconds
+            {Pid, Ref} = spawn_monitor(fun() -> exit(call(6_000)) end),
             {ok, _} = ?block_until(#{?snk_kind := shot}, 1000, infinity),
             {ok, #{pid := ServerPid}} = ?block_until(
                 #{?snk_kind := ehttpc_server, delay := _}, 1000, infinity
             ),
             ServerPid ! close_socket,
+            {ok, _} = ?block_until(#{?snk_kind := handle_client_down}, 1000, infinity),
             Res =
                 receive
                     {'DOWN', Ref, process, Pid, ExitReason} ->
                         ExitReason
-                after 5_000 ->
+                after 3_000 ->
                     Worker = ehttpc_pool:pick_worker(?POOL),
                     io:format(user, "~p\n", [sys:get_state(Worker)]),
                     exit(timeout_waiting_for_gun_response)
