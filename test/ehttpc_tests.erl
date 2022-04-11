@@ -41,7 +41,8 @@ send_10_test_() ->
     PoolOpts1 = pool_opts(Port1, false),
     PoolOpts2 = pool_opts(Port2, false),
     [
-        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000, 0)) end},
+        %% allow one retry for oneoff=true server, because of the 'DOWN' message race
+        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000, 1)) end},
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_sync(10)) end}
     ].
 
@@ -98,7 +99,8 @@ send_100_test_() ->
     PoolOpts1 = pool_opts(Port, false),
     PoolOpts2 = pool_opts(Port, true),
     [
-        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(100, 1000, 0)) end},
+        %% allow one retry for oneoff=true server, because of the 'DOWN' message race
+        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(100, 1000, 1)) end},
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_async(100)) end}
     ].
 
