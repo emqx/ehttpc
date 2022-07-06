@@ -177,6 +177,49 @@ requst_expire_test() ->
         end
     ).
 
+health_check_test() ->
+    Port = ?PORT,
+    {timeout, 20,
+     fun() ->
+        ?WITH(
+            #{
+                port => Port,
+                name => ?FUNCTION_NAME,
+                delay => 0
+            },
+            pool_opts(Port, true),
+            begin
+                Worker = ehttpc_pool:pick_worker(?POOL),
+                ?assertEqual(
+                    ok,
+                    ehttpc:health_check(Worker, 5_000)
+                )
+            end
+        )
+     end}.
+
+health_check_timeout_test() ->
+    Port = ?PORT,
+    Unreachable = "8.8.8.8",
+    {timeout, 20,
+     fun() ->
+        ?WITH(
+            #{
+                port => Port,
+                name => ?FUNCTION_NAME,
+                delay => 0
+            },
+            pool_opts(Unreachable, Port, true),
+            begin
+                Worker = ehttpc_pool:pick_worker(?POOL),
+                ?assertEqual(
+                    {error, connect_timeout},
+                    ehttpc:health_check(Worker, 5_000)
+                )
+            end
+        )
+     end}.
+
 server_outage_test_() ->
     Port = ?PORT,
     ServerName = ?FUNCTION_NAME,

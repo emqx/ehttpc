@@ -100,7 +100,14 @@ start_link(Pool, Id, Opts) ->
 
 -spec health_check(pid(), integer()) -> ok | {error, term()}.
 health_check(Worker, Timeout) ->
-    gen_server:call(Worker, {health_check, Timeout}, Timeout + timer:seconds(1)).
+    CallTimeout = Timeout + timer:seconds(2),
+    try gen_server:call(Worker, {health_check, Timeout}, CallTimeout)
+    catch
+        exit:{timeout, _Details} ->
+            {error, timeout};
+        exit:Reason ->
+            {error, {ehttpc_worker_down, Reason}}
+    end.
 
 request(Pool, Method, Request) ->
     request(Pool, Method, Request, 5000).
