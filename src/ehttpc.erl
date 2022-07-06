@@ -25,6 +25,7 @@
     request/4,
     request/5,
     workers/1,
+    health_check/2,
     name/1
 ]).
 
@@ -97,6 +98,10 @@ get_state(Worker, Style) when is_pid(Worker) ->
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
+-spec health_check(pid(), integer()) -> ok | {error, term()}.
+health_check(Worker, Timeout) ->
+    gen_server:call(Worker, {health_check, Timeout}, Timeout + timer:seconds(1)).
+
 request(Pool, Method, Request) ->
     request(Pool, Method, Request, 5000).
 
@@ -156,6 +161,19 @@ init([Pool, Id, Opts]) ->
     },
     true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
     {ok, State}.
+
+handle_call({health_check, _}, _From, State = #state{gun_state = up}) ->
+    {reply, ok, State};
+handle_call({health_check, Timeout}, _From, State = #state{gun_state = down}) ->
+    case open(State) of
+        {ok, NewState} ->
+            do_after_gun_up(NewState, now_() + Timeout,
+                fun(State1) ->
+                    {reply, ok, State1}
+                end);
+        {error, Reason} ->
+            {reply, {error, Reason}, State}
+    end;
 
 handle_call(?REQ_CALL(_Method, _Request, _ExpireAt) = Req, From, State0) ->
     State1 = enqueue_req(From, Req, upgrade_requests(State0)),
@@ -567,23 +585,13 @@ shoot(
 shoot(
     Request = ?REQ_CALL(_, _Req, ExpireAt),
     From,
-    State0 = #state{client = Client, mref = MRef, gun_state = down}
+    State0 = #state{client = Client, gun_state = down}
 ) when is_pid(Client) ->
-    Timeout = timeout(ExpireAt),
-    %% wait for the http client to be ready
-    {Res, State} = gun_await_up(Client, ExpireAt, Timeout, MRef, State0),
-    case Res of
-        {ok, _} ->
+    do_after_gun_up(State0, ExpireAt,
+        fun(State) ->
             ?tp(gun_up, #{from => From, req => _Req}),
-            shoot(Request, From, State#state{gun_state = up});
-        {error, connect_timeout} ->
-            %% the caller can not wait logger
-            %% but the connection is likely to be useful
-            {reply, {error, connect_timeout}, State};
-        {error, Reason} ->
-            erlang:demonitor(MRef, [flush]),
-            {reply, {error, Reason}, State#state{client = ?undef, mref = ?undef}}
-    end;
+            shoot(Request, From, State)
+        end);
 shoot(
     ?REQ_CALL(Method, Request, ExpireAt),
     From,
@@ -598,6 +606,22 @@ shoot(
     %% no need for the payload
     Req = ?SENT_REQ(From, ExpireAt, ?undef),
     {noreply, State#state{requests = put_sent_req(StreamRef, Req, Requests)}}.
+
+do_after_gun_up(State0 = #state{client = Client, mref = MRef}, ExpireAt, Fun) ->
+    Timeout = timeout(ExpireAt),
+    %% wait for the http client to be ready
+    {Res, State} = gun_await_up(Client, ExpireAt, Timeout, MRef, State0),
+    case Res of
+        {ok, _} ->
+            Fun(State#state{gun_state = up});
+        {error, connect_timeout} ->
+            %% the caller can not wait logger
+            %% but the connection is likely to be useful
+            {reply, {error, connect_timeout}, State};
+        {error, Reason} ->
+            erlang:demonitor(MRef, [flush]),
+            {reply, {error, Reason}, State#state{client = ?undef, mref = ?undef}}
+    end.
 
 %% This is a copy of gun:wait_up/3
 %% with the '$gen_call' clause added so the calls in the mail box
