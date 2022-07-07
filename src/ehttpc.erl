@@ -101,7 +101,8 @@ start_link(Pool, Id, Opts) ->
 -spec health_check(pid(), integer()) -> ok | {error, term()}.
 health_check(Worker, Timeout) ->
     CallTimeout = Timeout + timer:seconds(2),
-    try gen_server:call(Worker, {health_check, Timeout}, CallTimeout)
+    try
+        gen_server:call(Worker, {health_check, Timeout}, CallTimeout)
     catch
         exit:{timeout, _Details} ->
             {error, timeout};
@@ -174,14 +175,16 @@ handle_call({health_check, _}, _From, State = #state{gun_state = up}) ->
 handle_call({health_check, Timeout}, _From, State = #state{gun_state = down}) ->
     case open(State) of
         {ok, NewState} ->
-            do_after_gun_up(NewState, now_() + Timeout,
+            do_after_gun_up(
+                NewState,
+                now_() + Timeout,
                 fun(State1) ->
                     {reply, ok, State1}
-                end);
+                end
+            );
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
-
 handle_call(?REQ_CALL(_Method, _Request, _ExpireAt) = Req, From, State0) ->
     State1 = enqueue_req(From, Req, upgrade_requests(State0)),
     State = maybe_shoot(State1),
@@ -594,11 +597,14 @@ shoot(
     From,
     State0 = #state{client = Client, gun_state = down}
 ) when is_pid(Client) ->
-    do_after_gun_up(State0, ExpireAt,
+    do_after_gun_up(
+        State0,
+        ExpireAt,
         fun(State) ->
             ?tp(gun_up, #{from => From, req => _Req}),
             shoot(Request, From, State)
-        end);
+        end
+    );
 shoot(
     ?REQ_CALL(Method, Request, ExpireAt),
     From,

@@ -179,8 +179,7 @@ requst_expire_test() ->
 
 health_check_test() ->
     Port = ?PORT,
-    {timeout, 20,
-     fun() ->
+    {timeout, 20, fun() ->
         ?WITH(
             #{
                 port => Port,
@@ -196,13 +195,12 @@ health_check_test() ->
                 )
             end
         )
-     end}.
+    end}.
 
 health_check_timeout_test() ->
     Port = ?PORT,
     Unreachable = "8.8.8.8",
-    {timeout, 20,
-     fun() ->
+    {timeout, 20, fun() ->
         ?WITH(
             #{
                 port => Port,
@@ -218,7 +216,7 @@ health_check_timeout_test() ->
                 )
             end
         )
-     end}.
+    end}.
 
 server_outage_test_() ->
     Port = ?PORT,
