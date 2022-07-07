@@ -643,6 +643,8 @@ gun_await_up(Pid, ExpireAt, Timeout, MRef, State0) ->
     receive
         {gun_up, Pid, Protocol} ->
             {{ok, Protocol}, State0};
+        {'DOWN', MRef, process, Pid, {shutdown, Reason}} ->
+            {{error, Reason}, State0};
         {'DOWN', MRef, process, Pid, Reason} ->
             {{error, Reason}, State0};
         ?GEN_CALL_REQ(From, Call) ->
