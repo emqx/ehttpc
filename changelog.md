@@ -1,5 +1,11 @@
 # ehttpc changes
 
+## 0.2.1
+
+* Improvements and Bug Fixes
+
+  - Add ehttpc:health_check/2
+
 ## 0.2.0
 
 * Major refactoring on top of 0.1.15

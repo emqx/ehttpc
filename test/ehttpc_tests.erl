@@ -177,6 +177,133 @@ requst_expire_test() ->
         end
     ).
 
+health_check_test_() ->
+    Port = ?PORT,
+    %% the normal case
+    [
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    ?assertEqual(
+                        ok,
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end},
+        %% do health_check twice
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    ?assertEqual(
+                        ok,
+                        ehttpc:health_check(Worker, 5_000)
+                    ),
+                    ?assertEqual(
+                        ok,
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end}
+    ].
+
+health_check_abnormal_test_() ->
+    Port = ?PORT,
+    Unreachable = "8.8.8.8",
+    Unknown = "unknown-host0",
+    [
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    exit(Worker, kill),
+                    ?assertMatch(
+                        {error, {ehttpc_worker_down, _}},
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end},
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Unreachable, Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    ?assertEqual(
+                        {error, connect_timeout},
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end},
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Unknown, Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    ?assertEqual(
+                        {error, nxdomain},
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end},
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                [
+                    {host, "127.0.0.1"},
+                    {port, ?PORT},
+                    {pool_size, 1},
+                    {pool_type, random},
+                    {connect_timeout, invalid_val}
+                ],
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
+                    ?assertEqual(
+                        {error, {options, {connect_timeout, invalid_val}}},
+                        ehttpc:health_check(Worker, 5_000)
+                    )
+                end
+            )
+        end}
+    ].
+
 server_outage_test_() ->
     Port = ?PORT,
     ServerName = ?FUNCTION_NAME,

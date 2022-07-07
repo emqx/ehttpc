@@ -85,6 +85,8 @@ has_a_match(_, []) ->
     false;
 has_a_match(Tag, [{Tag, _} | _]) ->
     true;
+has_a_match(Tag, [{Tag1, _} | Rest]) when is_list(Tag1) ->
+    has_a_match(Tag, Rest);
 has_a_match(Tag, [{Re, _} | Rest]) when is_binary(Re) ->
     case re:run(Tag, Re, [unicode, {capture, first, list}]) of
         {match, [Tag]} -> true;
