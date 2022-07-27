@@ -1,10 +1,16 @@
 # ehttpc changes
 
+## 0.3.0
+
+* Changes on top of 0.2.1:
+
+  - Prohibit the `retry` and `retry_timeout` options.
+
 ## 0.2.1
 
 * Improvements and Bug Fixes
 
-  - Add ehttpc:health_check/2
+  - Add ehttpc:health_check/2.
 
 ## 0.2.0
 
