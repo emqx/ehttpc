@@ -86,8 +86,6 @@ pool_opts(Host, Port, Pipeline, PrioLatest) ->
         {pool_size, ?POOL_SIZE},
         {pool_type, random},
         {connect_timeout, 5000},
-        {retry, 0},
-        {retry_timeout, 1000},
         {prioritise_latest, PrioLatest}
     ].
 

@@ -247,7 +247,7 @@ do_handle_info(
 ) ->
     handle_client_down(State, Reason);
 do_handle_info(Info, State) ->
-    ?LOG(warning, "~p unexpected_info: ~p", [?MODULE, Info]),
+    ?LOG(warning, "~p unexpected_info: ~p, client: ~p", [?MODULE, Info, State#state.client]),
     State.
 
 terminate(_Reason, #state{pool = Pool, id = Id, client = Client}) ->
@@ -390,7 +390,6 @@ gun_opts(Opts) ->
     GunNoRetry = 0,
     gun_opts(Opts, #{
         retry => GunNoRetry,
-        retry_timeout => 1000,
         connect_timeout => 5000,
         %% The keepalive mechanism of gun will send "\r\n" for keepalive,
         %% which may cause misjudgment by some servers, so we disabled it by default
@@ -400,10 +399,10 @@ gun_opts(Opts) ->
 
 gun_opts([], Acc) ->
     Acc;
-gun_opts([{retry, Retry} | Opts], Acc) ->
-    gun_opts(Opts, Acc#{retry => Retry});
-gun_opts([{retry_timeout, RetryTimeout} | Opts], Acc) ->
-    gun_opts(Opts, Acc#{retry_timeout => RetryTimeout});
+gun_opts([{retry, _} | _Opts], _Acc) ->
+    error({not_allowd_opts, retry});
+gun_opts([{retry_timeout, _} | _Opts], _Acc) ->
+    error({not_allowd_opts, retry_timeout});
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
 gun_opts([{transport, Transport} | Opts], Acc) ->
