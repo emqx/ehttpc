@@ -57,10 +57,10 @@
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
--define(REQ_CALL(Method, Req, ExpireAt), {Method, Req, ExpireAt}).
+-define(REQ(Method, Req, ExpireAt), {Method, Req, ExpireAt}).
 -define(PEND_REQ(From, Req), {From, Req}).
 -define(SENT_REQ(StreamRef, ExpireAt, Acc), {StreamRef, ExpireAt, Acc}).
--define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ_CALL(_, _, _) = Call}).
+-define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ(_, _, _) = Call}).
 -define(undef, undefined).
 
 -record(state, {
@@ -122,7 +122,7 @@ request({Pool, N}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
     request(ehttpc_pool:pick_worker(Pool, N), Method, Request, Timeout, Retry);
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
     ExpireAt = now_() + Timeout,
-    try gen_server:call(Worker, ?REQ_CALL(Method, Request, ExpireAt), Timeout + 500) of
+    try gen_server:call(Worker, ?REQ(Method, Request, ExpireAt), Timeout + 500) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
         {error, Reason} when Retry < 1 ->
@@ -185,7 +185,7 @@ handle_call({health_check, Timeout}, _From, State = #state{gun_state = down}) ->
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
-handle_call(?REQ_CALL(_Method, _Request, _ExpireAt) = Req, From, State0) ->
+handle_call(?REQ(_Method, _Request, _ExpireAt) = Req, From, State0) ->
     State1 = enqueue_req(From, Req, upgrade_requests(State0)),
     State = maybe_shoot(State1),
     {noreply, State};
@@ -522,7 +522,7 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
             false ->
                 {fun queue:peek/1, fun queue:out/1}
         end,
-    {value, ?PEND_REQ(_, ?REQ_CALL(_, _, ExpireAt))} = PeekFun(Pending),
+    {value, ?PEND_REQ(_, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
     case Now > ExpireAt of
         true ->
             {_, NewPendings} = OutFun(Pending),
@@ -580,7 +580,7 @@ do_shoot(#state{requests = #{pending := Pending0, pending_count := N} = Requests
     end.
 
 shoot(
-    Request = ?REQ_CALL(_, _, _),
+    Request = ?REQ(_, _, _),
     From,
     State = #state{client = ?undef, gun_state = down}
 ) ->
@@ -592,7 +592,7 @@ shoot(
             {reply, {error, Reason}, State}
     end;
 shoot(
-    Request = ?REQ_CALL(_, _Req, ExpireAt),
+    Request = ?REQ(_, _Req, ExpireAt),
     From,
     State0 = #state{client = Client, gun_state = down}
 ) when is_pid(Client) ->
@@ -605,7 +605,7 @@ shoot(
         end
     );
 shoot(
-    ?REQ_CALL(Method, Request, ExpireAt),
+    ?REQ(Method, Request, ExpireAt),
     From,
     State = #state{
         client = Client,
