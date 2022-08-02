@@ -24,6 +24,7 @@
     request/3,
     request/4,
     request/5,
+    request_async/5,
     workers/1,
     health_check/2,
     name/1
@@ -54,12 +55,22 @@
     option/0
 ]).
 
+-type method() :: get | put | post | head | delete.
+-type path() :: binary() | string().
+-type headers() :: [{binary(), iodata()}].
+-type body() :: iodata().
+-type callback() :: {function(), list()}.
+-type request() :: path() | {path(), headers()} | {path(), headers(), body()}.
+
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
 -define(REQ(Method, Req, ExpireAt), {Method, Req, ExpireAt}).
--define(PEND_REQ(From, Req), {From, Req}).
--define(SENT_REQ(StreamRef, ExpireAt, Acc), {StreamRef, ExpireAt, Acc}).
+-define(PEND_REQ(ReplyTo, Req), {ReplyTo, Req}).
+-define(SENT_REQ(ReplyTo, ExpireAt, Acc), {ReplyTo, ExpireAt, Acc}).
+-define(ASYNC_REQ(Method, Req, ExpireAt, ResultCallback),
+    {async, Method, Req, ExpireAt, ResultCallback}
+).
 -define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ(_, _, _) = Call}).
 -define(undef, undefined).
 
@@ -138,6 +149,13 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
             {error, {ehttpc_worker_down, Reason}}
     end.
 
+%% @doc Send an async request. The callback is evaluated when an error happens or http response is received.
+-spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
+request_async(Worker, Method, Request, Timeout, ResultCallback) when is_pid(Worker) ->
+    ExpireAt = now_() + Timeout,
+    _ = erlang:send(Worker, ?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback)),
+    ok.
+
 workers(Pool) ->
     gproc_pool:active_workers(name(Pool)).
 
@@ -197,6 +215,11 @@ handle_cast(_Msg, State0) ->
     State = maybe_shoot(upgrade_requests(State0)),
     {noreply, State}.
 
+handle_info(?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback), State0) ->
+    Req = ?REQ(Method, Request, ExpireAt),
+    State1 = enqueue_req(ResultCallback, Req, upgrade_requests(State0)),
+    State = maybe_shoot(State1),
+    {noreply, State};
 handle_info(Info, State0) ->
     State1 = do_handle_info(Info, upgrade_requests(State0)),
     State = maybe_shoot(State1),
@@ -225,8 +248,8 @@ do_handle_info(
             State;
         {expired, NRequests} ->
             State#state{requests = NRequests};
-        {?SENT_REQ(From, _, _), NRequests} ->
-            gen_server:reply(From, {error, Reason}),
+        {?SENT_REQ(ReplyTo, _, _), NRequests} ->
+            reply(ReplyTo, {error, Reason}),
             State#state{requests = NRequests}
     end;
 do_handle_info({gun_up, Client, _}, State = #state{client = Client}) ->
@@ -363,8 +386,8 @@ handle_gun_down(#state{requests = Requests} = State, KilledStreams, Reason) ->
                         Acc;
                     {expired, NAcc} ->
                         NAcc;
-                    {?SENT_REQ(From, _, _), NAcc} ->
-                        gen_server:reply(From, {error, Reason}),
+                    {?SENT_REQ(ReplyTo, _, _), NAcc} ->
+                        reply(ReplyTo, {error, Reason}),
                         NAcc
                 end
             end,
@@ -471,7 +494,7 @@ take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
         error ->
             error;
         {Req, NewSent} ->
-            case is_req_expired(Req, now_()) of
+            case is_sent_req_expired(Req, now_()) of
                 true ->
                     {expired, Requests#{sent := NewSent}};
                 false ->
@@ -479,19 +502,28 @@ take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
             end
     end.
 
-is_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) ->
-    Now > ExpireAt orelse (not erlang:is_process_alive(Pid)).
+is_sent_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) when is_pid(Pid) ->
+    %% for gen_server:call, it is aborted after timeout, there is no need to send
+    %% reply to the caller
+    Now > ExpireAt orelse (not erlang:is_process_alive(Pid));
+is_sent_req_expired(?SENT_REQ(_, _, _), _) ->
+    %% for async requests, there is no way to tell if the caller
+    %% the provided result-callback should be evaluated or not,
+    %% to be on the safe side, we never consider sent async-requests expired.
+    %% that is, we may still try evaluate the result callback
+    %% after the deadline.
+    false.
 
 %% reply error to all callers which are waiting for the sent reqs
 reply_error_for_sent_reqs(#{sent := Sent} = R, Reason) ->
     Now = now_(),
     lists:foreach(
-        fun({_, ?SENT_REQ(From, _, _) = Req}) ->
-            case is_req_expired(Req, Now) of
+        fun({_, ?SENT_REQ(ReplyTo, _, _) = Req}) ->
+            case is_sent_req_expired(Req, Now) of
                 true ->
                     ok;
                 false ->
-                    gen_server:reply(From, {error, Reason})
+                    reply(ReplyTo, {error, Reason})
             end
         end,
         maps:to_list(Sent)
@@ -522,26 +554,37 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
             false ->
                 {fun queue:peek/1, fun queue:out/1}
         end,
-    {value, ?PEND_REQ(_, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
+    {value, ?PEND_REQ(ReplyTo, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
     case Now > ExpireAt of
         true ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
+            ok = maybe_reply_timeout(ReplyTo),
             drop_expired(NewRequests, Now);
         false ->
             Requests
     end.
 
+%% For async-request, we evaluate the result-callback with {error, timeout}
+maybe_reply_timeout({F, A}) when is_function(F) ->
+    _ = erlang:apply(F, A ++ [{error, timeout}]),
+    ok;
+maybe_reply_timeout(_) ->
+    %% This is not a callback, but the gen_server:call's From
+    %% The caller should have alreay given up waiting for a reply,
+    %% so no need to call gen_server:reply(From, {error, timeout})
+    ok.
+
 %% enqueue the pending requests
-enqueue_req(From, Req, #state{requests = Requests0} = State) ->
+enqueue_req(ReplyTo, Req, #state{requests = Requests0} = State) ->
     #{
         pending := Pending,
         pending_count := PC
     } = Requests0,
     NewPending =
         case maps:get(prioritise_latest, Requests0, false) of
-            true -> queue:in_r(?PEND_REQ(From, Req), Pending);
-            false -> queue:in(?PEND_REQ(From, Req), Pending)
+            true -> queue:in_r(?PEND_REQ(ReplyTo, Req), Pending);
+            false -> queue:in(?PEND_REQ(ReplyTo, Req), Pending)
         end,
     Requests = Requests0#{pending := NewPending, pending_count := PC + 1},
     State#state{requests = drop_expired(Requests)}.
@@ -566,12 +609,12 @@ maybe_shoot(#state{enable_pipelining = EP, requests = Requests0, client = Client
 do_shoot(#state{requests = #{pending_count := 0}} = State) ->
     State;
 do_shoot(#state{requests = #{pending := Pending0, pending_count := N} = Requests0} = State0) ->
-    {{value, ?PEND_REQ(From, Req)}, Pending} = queue:out(Pending0),
+    {{value, ?PEND_REQ(ReplyTo, Req)}, Pending} = queue:out(Pending0),
     Requests = Requests0#{pending := Pending, pending_count := N - 1},
     State1 = State0#state{requests = Requests},
-    case shoot(Req, From, State1) of
+    case shoot(Req, ReplyTo, State1) of
         {reply, Reply, State} ->
-            gen_server:reply(From, Reply),
+            reply(ReplyTo, Reply),
             %% continue shooting because there might be more
             %% calls queued while evaluating handle_req/3
             maybe_shoot(State);
@@ -581,32 +624,32 @@ do_shoot(#state{requests = #{pending := Pending0, pending_count := N} = Requests
 
 shoot(
     Request = ?REQ(_, _, _),
-    From,
+    ReplyTo,
     State = #state{client = ?undef, gun_state = down}
 ) ->
     %% no http client, start it
     case open(State) of
         {ok, NewState} ->
-            shoot(Request, From, NewState);
+            shoot(Request, ReplyTo, NewState);
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
 shoot(
     Request = ?REQ(_, _Req, ExpireAt),
-    From,
+    ReplyTo,
     State0 = #state{client = Client, gun_state = down}
 ) when is_pid(Client) ->
     do_after_gun_up(
         State0,
         ExpireAt,
         fun(State) ->
-            ?tp(gun_up, #{from => From, req => _Req}),
-            shoot(Request, From, State)
+            ?tp(gun_up, #{from => ReplyTo, req => _Req}),
+            shoot(Request, ReplyTo, State)
         end
     );
 shoot(
     ?REQ(Method, Request, ExpireAt),
-    From,
+    ReplyTo,
     State = #state{
         client = Client,
         requests = Requests,
@@ -614,9 +657,9 @@ shoot(
     }
 ) when is_pid(Client) ->
     StreamRef = do_request(Client, Method, Request),
-    ?tp(shot, #{from => From, req => Request, reqs => Requests}),
+    ?tp(shot, #{from => ReplyTo, req => Request, reqs => Requests}),
     %% no need for the payload
-    Req = ?SENT_REQ(From, ExpireAt, ?undef),
+    Req = ?SENT_REQ(ReplyTo, ExpireAt, ?undef),
     {noreply, State#state{requests = put_sent_req(StreamRef, Req, Requests)}}.
 
 do_after_gun_up(State0 = #state{client = Client, mref = MRef}, ExpireAt, Fun) ->
@@ -646,6 +689,12 @@ gun_await_up(Pid, ExpireAt, Timeout, MRef, State0) ->
             {{error, Reason}, State0};
         {'DOWN', MRef, process, Pid, Reason} ->
             {{error, Reason}, State0};
+        ?ASYNC_REQ(Method, Request, ExpireAt1, ResultCallback) ->
+            Req = ?REQ(Method, Request, ExpireAt1),
+            State = enqueue_req(ResultCallback, Req, State0),
+            %% keep waiting
+            NewTimeout = timeout(ExpireAt),
+            gun_await_up(Pid, ExpireAt, NewTimeout, MRef, State);
         ?GEN_CALL_REQ(From, Call) ->
             State = enqueue_req(From, Call, State0),
             %% keep waiting
@@ -667,7 +716,7 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             %% the call is expired, caller is no longer waiting for a reply
             ok = cancel_stream(Client, StreamRef),
             State#state{requests = NRequests};
-        {?SENT_REQ(From, ExpireAt, ?undef), NRequests} ->
+        {?SENT_REQ(ReplyTo, ExpireAt, ?undef), NRequests} ->
             %% gun_response, http head
 
             %% assert, no body yet
@@ -675,14 +724,14 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             case IsFin of
                 fin ->
                     %% only http heads no body
-                    gen_server:reply(From, {ok, StatusCode, Headers}),
+                    reply(ReplyTo, {ok, StatusCode, Headers}),
                     State#state{requests = NRequests};
                 nofin ->
                     %% start accumulating data
-                    Req = ?SENT_REQ(From, ExpireAt, {StatusCode, Headers, []}),
+                    Req = ?SENT_REQ(ReplyTo, ExpireAt, {StatusCode, Headers, []}),
                     State#state{requests = put_sent_req(StreamRef, Req, NRequests)}
             end;
-        {?SENT_REQ(From, ExpireAt, {StatusCode0, Headers0, Data0}), NRequests} ->
+        {?SENT_REQ(ReplyTo, ExpireAt, {StatusCode0, Headers0, Data0}), NRequests} ->
             %% gun_data, http body
 
             %% assert
@@ -691,12 +740,18 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             ?undef = Headers,
             case IsFin of
                 fin ->
-                    gen_server:reply(
-                        From, {ok, StatusCode0, Headers0, iolist_to_binary([Data0, Data])}
+                    reply(
+                        ReplyTo, {ok, StatusCode0, Headers0, iolist_to_binary([Data0, Data])}
                     ),
                     State#state{requests = NRequests};
                 nofin ->
-                    Req = ?SENT_REQ(From, ExpireAt, {StatusCode0, Headers0, [Data0, Data]}),
+                    Req = ?SENT_REQ(ReplyTo, ExpireAt, {StatusCode0, Headers0, [Data0, Data]}),
                     State#state{requests = put_sent_req(StreamRef, Req, NRequests)}
             end
     end.
+
+reply({F, A}, Result) when is_function(F) ->
+    _ = erlang:apply(F, A ++ [Result]),
+    ok;
+reply(From, Result) ->
+    gen_server:reply(From, Result).

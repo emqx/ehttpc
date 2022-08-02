@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.0
+
+* Add async APIs
+
 ## 0.3.0
 
 * Changes on top of 0.2.1:

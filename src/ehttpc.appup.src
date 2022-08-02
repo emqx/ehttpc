@@ -1,6 +1,9 @@
 %% -*-: erlang -*-
-{"0.3.0",
+{"0.4.0",
    [
+     {"0.3.0", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
      {<<"0.2.[0-1]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
@@ -17,6 +20,9 @@
      ]}
    ],
    [
+     {"0.3.0", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
      {<<"0.2.[0-1]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
