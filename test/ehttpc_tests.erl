@@ -524,30 +524,10 @@ request_expire_test() ->
     ).
 
 with_server(Port, Name, Delay, F) ->
-    Opts = #{port => Port, name => Name, delay => Delay},
-    with_server(Opts, F).
+    ehttpc_test_lib:with_server(Port, Name, Delay, F).
 
 with_server(Opts, F) ->
-    ?check_trace(
-        begin
-            Pid = ehttpc_server:start_link(Opts),
-            try
-                {ok, _} =
-                    ?block_until(
-                        #{
-                            ?snk_kind := ehttpc_server,
-                            state := accepting
-                        },
-                        2_000,
-                        infinity
-                    ),
-                F()
-            after
-                ehttpc_server:stop(Pid)
-            end
-        end,
-        []
-    ).
+    ehttpc_test_lib:with_server(Opts, F).
 
 req() -> {<<"/">>, [{<<"Connection">>, <<"Keep-Alive">>}]}.
 
@@ -582,30 +562,16 @@ req_async(N, Timeout) ->
     ).
 
 pool_opts(Port, Pipeline) ->
-    pool_opts("127.0.0.1", Port, Pipeline).
+    ehttpc_test_lib:pool_opts(Port, Pipeline).
 
 pool_opts(Host, Port, Pipeline) ->
-    pool_opts(Host, Port, Pipeline, false).
+    ehttpc_test_lib:pool_opts(Host, Port, Pipeline).
 
 pool_opts(Host, Port, Pipeline, PrioLatest) ->
-    [
-        {host, Host},
-        {port, Port},
-        {enable_pipelining, Pipeline},
-        {pool_size, 1},
-        {pool_type, random},
-        {connect_timeout, 5000},
-        {prioritise_latest, PrioLatest}
-    ].
+    ehttpc_test_lib:pool_opts(Host, Port, Pipeline, PrioLatest).
 
 with_pool(Opts, F) ->
-    application:ensure_all_started(ehttpc),
-    try
-        {ok, _} = ehttpc_sup:start_pool(?POOL, Opts),
-        F()
-    after
-        ehttpc_sup:stop_pool(?POOL)
-    end.
+    ehttpc_test_lib:with_pool(?POOL, Opts, F).
 
 call(Timeout) ->
     ehttpc:request(?POOL, get, req(), Timeout, 0).

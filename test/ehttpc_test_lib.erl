@@ -19,8 +19,16 @@
 -export([
     nolink_apply/1,
     nolink_apply/2,
-    parallel_map/2
+    parallel_map/2,
+    with_server/2,
+    with_server/4,
+    with_pool/3,
+    pool_opts/2,
+    pool_opts/3,
+    pool_opts/4
 ]).
+
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 %% @doc Delegate a function to a worker process.
 %% The function may spawn_link other processes but we do not
@@ -83,6 +91,58 @@ nolink_apply(Fun, Timeout) when is_function(Fun, 0) ->
 -spec parallel_map(function(), list()) -> list().
 parallel_map(Fun, List) ->
     nolink_apply(fun() -> do_parallel_map(Fun, List) end).
+
+pool_opts(Port, Pipeline) ->
+    pool_opts("127.0.0.1", Port, Pipeline).
+
+pool_opts(Host, Port, Pipeline) ->
+    pool_opts(Host, Port, Pipeline, false).
+
+pool_opts(Host, Port, Pipeline, PrioLatest) ->
+    [
+        {host, Host},
+        {port, Port},
+        {enable_pipelining, Pipeline},
+        {pool_size, 1},
+        {pool_type, random},
+        {connect_timeout, 5000},
+        {prioritise_latest, PrioLatest}
+    ].
+
+with_pool(Pool, Opts, F) ->
+    application:ensure_all_started(ehttpc),
+    try
+        {ok, _} = ehttpc_sup:start_pool(Pool, Opts),
+        F()
+    after
+        ehttpc_sup:stop_pool(Pool)
+    end.
+
+with_server(Port, Name, Delay, F) ->
+    Opts = #{port => Port, name => Name, delay => Delay},
+    with_server(Opts, F).
+
+with_server(Opts, F) ->
+    ?check_trace(
+        begin
+            Pid = ehttpc_server:start_link(Opts),
+            try
+                {ok, _} =
+                    ?block_until(
+                        #{
+                            ?snk_kind := ehttpc_server,
+                            state := accepting
+                        },
+                        2_000,
+                        infinity
+                    ),
+                F()
+            after
+                ehttpc_server:stop(Pid)
+            end
+        end,
+        []
+    ).
 
 %%------------------------------------------------------------------------------
 %% Internal Functions
