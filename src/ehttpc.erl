@@ -24,6 +24,7 @@
     request/3,
     request/4,
     request/5,
+    request_async/4,
     request_async/5,
     workers/1,
     health_check/2,
@@ -148,6 +149,10 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
         exit:Reason ->
             {error, {ehttpc_worker_down, Reason}}
     end.
+
+-spec request_async(pid(), method(), request(), callback()) -> ok.
+request_async(Worker, Method, Request, ResultCallback) when is_pid(Worker) ->
+    request_async(Worker, Method, Request, 5000, ResultCallback).
 
 %% @doc Send an async request. The callback is evaluated when an error happens or http response is received.
 -spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
