@@ -30,7 +30,6 @@ start_link(#{port := Port, name := Name} = Opts) ->
         fun() ->
             register(Name, self()),
             {ok, LSocket} = listen(Port),
-            io:format(user, "Stream HTTP Server started, listening on port ~p~n", [Port]),
             Acceptor = spawn_link(fun() ->
                 ?tp(?MODULE, #{pid => self(), state => accepting}),
                 accept(LSocket, Opts)
@@ -182,11 +181,13 @@ socket_send_body_chunks(_Socket, [], _, _) ->
 socket_send_body_chunks(Socket, [H | T], Delay, FinDelay) ->
     case gen_tcp:send(Socket, H) of
         ok ->
+            %% maybe delya each chunk (when Delay > 0)
             timer:sleep(Delay),
-            case T =:= [] of
-                true ->
+            case T of
+                [_] when FinDelay > 0 ->
+                    %% delay the last chunk
                     timer:sleep(FinDelay);
-                false ->
+                _ ->
                     ok
             end,
             socket_send_body_chunks(Socket, T, Delay, FinDelay);

@@ -325,8 +325,7 @@ server_outage_test_() ->
                     {'DOWN', Ref, process, Pid, ExitReason} ->
                         ExitReason
                 after 3_000 ->
-                    Worker = ehttpc_pool:pick_worker(?POOL),
-                    io:format(user, "~p\n", [sys:get_state(Worker)]),
+                    _Worker = ehttpc_pool:pick_worker(?POOL),
                     exit(timeout_waiting_for_gun_response)
                 end,
             case Res of
@@ -500,6 +499,9 @@ connect_timeout_test() ->
 
 request_expire_test() ->
     Port = ?PORT,
+    ServerFinDelay = timer:seconds(1),
+    % the thrid request's timeout
+    ReqTimeout3 = ServerFinDelay * 3,
     with_server(
         #{
             port => Port,
@@ -517,7 +519,44 @@ request_expire_test() ->
                     ?assertEqual(
                         {error, timeout},
                         req_sync_1(_Timeout = 200)
-                    )
+                    ),
+                    ?assertMatch({ok, 200, _, _}, req_sync_1(ReqTimeout3))
+                end
+            )
+        end
+    ).
+
+request_expire_fin_too_late_test() ->
+    Port = ?PORT,
+    ServerFinDelay = timer:seconds(1),
+    % the thrid request's timeout
+    ReqTimeout3 = ServerFinDelay * 3,
+    CallTimeout = 200,
+    with_server(
+        #{
+            port => Port,
+            name => ?FUNCTION_NAME,
+            delay => 0,
+            chunked => #{
+                %% server delays one second before sending the last chunk
+                fin_delay => ServerFinDelay,
+                delay => 0,
+                chunk_size => 1 bsl 10,
+                chunks => 2
+            }
+        },
+        fun() ->
+            with_pool(
+                pool_opts(Port, false),
+                fun() ->
+                    %% this call will be blocked, and timeout
+                    spawn(fun() -> catch req_sync_1(CallTimeout) end),
+                    %% this call will be blocked, and expire without actually sending the request
+                    ?assertEqual(
+                        {error, timeout},
+                        req_sync_1(_Timeout = CallTimeout)
+                    ),
+                    ?assertMatch({ok, 200, _, _}, req_sync_1(ReqTimeout3))
                 end
             )
         end
