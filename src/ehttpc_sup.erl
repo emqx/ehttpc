@@ -64,7 +64,7 @@ pool_spec(Pool, Opts) ->
     #{id => child_id(Pool),
       start => {ehttpc_pool_sup, start_link, [Pool, Opts]},
       restart => transient,
-      shutdown => infinity,
+      shutdown => 5000,
       type => supervisor,
       modules => [ehttpc_pool_sup]}.
 

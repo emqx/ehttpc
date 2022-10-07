@@ -220,6 +220,10 @@ handle_info(?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback), State0) ->
     State1 = enqueue_req(ResultCallback, Req, upgrade_requests(State0)),
     State = maybe_shoot(State1),
     {noreply, State};
+handle_info({suspend, Time}, State) ->
+    %% only for testing
+    timer:sleep(Time),
+    {noreply, State};
 handle_info(Info, State0) ->
     State1 = do_handle_info(Info, upgrade_requests(State0)),
     State = maybe_shoot(State1),
