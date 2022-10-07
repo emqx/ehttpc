@@ -448,7 +448,12 @@ do_request(Client, put, {Path, Headers, Body}) ->
 do_request(Client, delete, {Path, Headers}) ->
     gun:delete(Client, Path, Headers).
 
-cancel_stream(Client, StreamRef) ->
+cancel_stream(fin, _Client, _StreamRef) ->
+    %% nothing to cancel anyway
+    %% otherwise gun will reply with a gun_error messsage
+    %% which is then discarded anyway
+    ok;
+cancel_stream(nofin, Client, StreamRef) ->
     %% this is just an async message sent to gun
     %% the gun stream process does not really cancel
     %% anything, but just mark the receiving process (i.e. self())
@@ -595,7 +600,7 @@ maybe_shoot(#state{enable_pipelining = EP, requests = Requests0, client = Client
     State = State0#state{requests = drop_expired(Requests0)},
     %% If the gun http client is down
     ClientDown = is_pid(Client) andalso (not is_process_alive(Client)),
-    %% Or when it too many has been sent already
+    %% Or when too many has been sent already
     case ClientDown orelse should_cool_down(EP, maps:size(Sent)) of
         true ->
             %% Then we should cool down, and let the gun responses
@@ -714,7 +719,7 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             State;
         {expired, NRequests} ->
             %% the call is expired, caller is no longer waiting for a reply
-            ok = cancel_stream(Client, StreamRef),
+            ok = cancel_stream(IsFin, Client, StreamRef),
             State#state{requests = NRequests};
         {?SENT_REQ(ReplyTo, ExpireAt, ?undef), NRequests} ->
             %% gun_response, http head
