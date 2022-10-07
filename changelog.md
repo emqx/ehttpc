@@ -2,28 +2,28 @@
 
 ## 0.4.1
 
-* Avoid sending cancel stream messages if the stream is already finished
-* Force shutdown after 10 seconds
+- Avoid sending stream cancellation messages to the 'gun' process if the stream is already finished ('fin' received)
+- Force kill pool workers after 5 seconds waiting for graceful shutdown
 
 ## 0.4.0
 
-* Add async APIs
+- Add async APIs
 
 ## 0.3.0
 
-* Changes on top of 0.2.1:
+- Changes on top of 0.2.1:
 
   - Prohibit the `retry` and `retry_timeout` options.
 
 ## 0.2.1
 
-* Improvements and Bug Fixes
+- Improvements and Bug Fixes
 
   - Add ehttpc:health_check/2.
 
 ## 0.2.0
 
-* Major refactoring on top of 0.1.15
+- Major refactoring on top of 0.1.15
   - Added test cases.
   - Support hot upgrade from all 0.1.X versions.
   - No lower level retry (in 'gun' the http client lib).
@@ -34,3 +34,8 @@
   - Now all requests are async, so the `ehttpc:request` calls can be collected
     from mailbox into process state, this makes the handling of gun responses
     more effecient.
+
+## 0.1.14
+
+- fixed appup. old versions missed ehttpc_pool
+- added check_vsn.escript to sure version consistent and run in ci
