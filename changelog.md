@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.4.1
+
+* Avoid sending cancel stream messages if the stream is already finished
+* Force shutdown after 10 seconds
+
 ## 0.4.0
 
 * Add async APIs
