@@ -95,7 +95,7 @@ loop(Socket, Opts) ->
     loop(Socket, Opts, <<>>).
 
 loop(Socket, Opts, Buffer) ->
-    #{delay := Delay0} = Opts,
+    Delay0 = maps:get(delay, Opts, 0),
     case gen_tcp:recv(Socket, 0) of
         {ok, Data} ->
             Split = binary:split(
@@ -158,9 +158,16 @@ socket_send(
             _ ->
                 0
         end,
+    FinDelay =
+        case Opts of
+            #{chunked := #{fin_delay := Fd}} ->
+                Fd;
+            _ ->
+                0
+        end,
     case gen_tcp:send(Socket, Headers) of
         ok ->
-            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay) of
+            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay) of
                 ok ->
                     socket_send(Socket, Rest, Opts);
                 {error, Reason} ->
@@ -170,13 +177,19 @@ socket_send(
             {error, Reason}
     end.
 
-socket_send_body_chunks(_Socket, [], _) ->
+socket_send_body_chunks(_Socket, [], _, _) ->
     ok;
-socket_send_body_chunks(Socket, [H | T], Delay) ->
+socket_send_body_chunks(Socket, [H | T], Delay, FinDelay) ->
     case gen_tcp:send(Socket, H) of
         ok ->
             timer:sleep(Delay),
-            socket_send_body_chunks(Socket, T, Delay);
+            case T =:= [] of
+                true ->
+                    timer:sleep(FinDelay);
+                false ->
+                    ok
+            end,
+            socket_send_body_chunks(Socket, T, Delay, FinDelay);
         {error, Reason} ->
             {error, Reason}
     end.
@@ -184,18 +197,28 @@ socket_send_body_chunks(Socket, [H | T], Delay) ->
 make_responses(0, _Opts) ->
     [];
 make_responses(N, Opts) ->
-    BodyChunks = make_body_chunks(Opts),
-    Headers = [
-        "HTTP/1.1 200 OK\r\n",
-        "Server: httpc_bench\r\n",
-        "Date: Tue, 07 Mar 2022 01:10:09 GMT\r\n",
-        "Content-Length: ",
-        integer_to_list(iolist_size(BodyChunks)),
-        "\r\n\r\n"
-    ],
-    [#{headers => Headers, body_chunks => BodyChunks} | make_responses(N - 1, Opts)].
+    Headers0 =
+        [ "HTTP/1.1 200 OK\r\n",
+          "Server: ehttpc_test_server\r\n",
+          "Date: Tue, 07 Mar 2022 01:10:09 GMT\r\n"
+        ],
+    {MoreHeaders, BodyChunks} =
+        case Opts of
+            #{chunked := _} ->
+                {["Transfer-Encoding: chunked", "\r\n", "\r\n"], make_chunks(Opts)};
+            _ ->
+                Body = iolist_to_binary(lists:duplicate(100, 0)),
+                Len = integer_to_list(iolist_size(Body)),
+                {["Content-Length: ", Len, "\r\n", "\r\n"], [Body]}
+        end,
+    Headers = Headers0 ++ MoreHeaders,
+    Resp = #{headers => Headers,
+             body_chunks => BodyChunks
+            },
+    [Resp | make_responses(N - 1, Opts)].
 
-make_body_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->
-    [iolist_to_binary(lists:duplicate(Size, I)) || I <- lists:seq(1, Count)];
-make_body_chunks(_) ->
-    [iolist_to_binary(lists:duplicate(100, 0))].
+make_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->
+    %% we use the counts to generat bytes, (to verify the final number of chunks received)
+    Count > 255 andalso error({bad_chunk_count, Count}),
+    RawL = [iolist_to_binary(lists:duplicate(Size, I)) || I <- lists:seq(1, Count)],
+    [cow_http_te:chunk(I) || I <- RawL] ++ [cow_http_te:last_chunk()].
