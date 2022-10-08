@@ -20,26 +20,25 @@
 
 -define(POOL, ?MODULE).
 
-
 shutdown_test_() ->
-    [ {timeout, 10, fun t_shutdown/0}
-    ].
+    [{timeout, 10, fun t_shutdown/0}].
 
 t_shutdown() ->
-    Opts = [ {host, "google.com"},
-             {port, "80"},
-             {enable_pipelining, 1},
-             {pool_size, 1},
-             {pool_type, random},
-             {connect_timeout, 5000},
-             {prioritise_latest, true}
-           ],
+    Opts = [
+        {host, "google.com"},
+        {port, "80"},
+        {enable_pipelining, 1},
+        {pool_size, 1},
+        {pool_type, random},
+        {connect_timeout, 5000},
+        {prioritise_latest, true}
+    ],
     application:ensure_all_started(ehttpc),
     {ok, SupPid} = ehttpc_sup:start_pool(?POOL, Opts),
     unlink(SupPid),
     _ = monitor(process, SupPid),
+    Worker = ehttpc_pool:pick_worker(?POOL),
     try
-        Worker = ehttpc_pool:pick_worker(?POOL),
         _ = monitor(process, Worker),
         _ = sys:get_state(Worker),
         %% suspend (zombie-fy) the (one and only) worker
@@ -50,18 +49,19 @@ t_shutdown() ->
             {'DOWN', _, process, SupPid, killed} ->
                 ok;
             Other2 ->
-                ct:fail({"unexpected_message", Other2})
+                error({"unexpected_message", Other2})
         after 6000 ->
-                  ct:fail("failed_to_stop_pool_supervisor")
+            error("failed_to_stop_pool_supervisor")
         end,
         receive
             {'DOWN', _, process, Worker, killed} ->
                 ok;
             Other ->
-                ct:fail({"unexpected_message", Other})
+                error({"unexpected_message", Other})
         after 1000 ->
-                  ct:fail("failed_to_stop_worker_from_sup_shutdown")
+            error("failed_to_stop_worker_from_sup_shutdown")
         end
     after
-        exit(SupPid, kill)
+        exit(SupPid, kill),
+        exit(Worker, kill)
     end.

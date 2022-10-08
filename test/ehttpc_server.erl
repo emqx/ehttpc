@@ -199,9 +199,10 @@ make_responses(0, _Opts) ->
     [];
 make_responses(N, Opts) ->
     Headers0 =
-        [ "HTTP/1.1 200 OK\r\n",
-          "Server: ehttpc_test_server\r\n",
-          "Date: Tue, 07 Mar 2022 01:10:09 GMT\r\n"
+        [
+            "HTTP/1.1 200 OK\r\n",
+            "Server: ehttpc_test_server\r\n",
+            "Date: Tue, 07 Mar 2022 01:10:09 GMT\r\n"
         ],
     {MoreHeaders, BodyChunks} =
         case Opts of
@@ -213,9 +214,10 @@ make_responses(N, Opts) ->
                 {["Content-Length: ", Len, "\r\n", "\r\n"], [Body]}
         end,
     Headers = Headers0 ++ MoreHeaders,
-    Resp = #{headers => Headers,
-             body_chunks => BodyChunks
-            },
+    Resp = #{
+        headers => Headers,
+        body_chunks => BodyChunks
+    },
     [Resp | make_responses(N - 1, Opts)].
 
 make_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->

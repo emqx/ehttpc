@@ -560,8 +560,8 @@ request_expire_fin_too_late_test() ->
             )
         end,
         fun(_, Trace) ->
-                %% assert one request dropped directly
-                ?assertMatch([_], ?of_kind(drop_expired, Trace))
+            %% assert one request dropped directly
+            ?assertMatch([_], ?of_kind(drop_expired, Trace))
         end
     ).
 
