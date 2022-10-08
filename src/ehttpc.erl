@@ -566,6 +566,7 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
             ok = maybe_reply_timeout(ReplyTo),
+            ?tp(?FUNCTION_NAME, #{}),
             drop_expired(NewRequests, Now);
         false ->
             Requests

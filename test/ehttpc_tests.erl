@@ -325,7 +325,6 @@ server_outage_test_() ->
                     {'DOWN', Ref, process, Pid, ExitReason} ->
                         ExitReason
                 after 3_000 ->
-                    _Worker = ehttpc_pool:pick_worker(?POOL),
                     exit(timeout_waiting_for_gun_response)
                 end,
             case Res of
@@ -499,9 +498,9 @@ connect_timeout_test() ->
 
 request_expire_test() ->
     Port = ?PORT,
-    ServerFinDelay = timer:seconds(1),
+    ServerDelay = timer:seconds(1),
     % the thrid request's timeout
-    ReqTimeout3 = ServerFinDelay * 3,
+    ReqTimeout3 = ServerDelay * 3,
     with_server(
         #{
             port => Port,
@@ -559,6 +558,10 @@ request_expire_fin_too_late_test() ->
                     ?assertMatch({ok, 200, _, _}, req_sync_1(ReqTimeout3))
                 end
             )
+        end,
+        fun(_, Trace) ->
+                %% assert one request dropped directly
+                ?assertMatch([_], ?of_kind(drop_expired, Trace))
         end
     ).
 
@@ -567,6 +570,9 @@ with_server(Port, Name, Delay, F) ->
 
 with_server(Opts, F) ->
     ehttpc_test_lib:with_server(Opts, F).
+
+with_server(Opts, F, CheckTrace) ->
+    ehttpc_test_lib:with_server(Opts, F, CheckTrace).
 
 req() -> {<<"/">>, [{<<"Connection">>, <<"Keep-Alive">>}]}.
 
