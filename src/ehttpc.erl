@@ -63,6 +63,9 @@
 -type request() :: path() | {path(), headers()} | {path(), headers(), body()}.
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -define(LOG(Level, Format, Args), logger:Level("ehttpc: " ++ Format, Args)).
 -define(REQ(Method, Req, ExpireAt), {Method, Req, ExpireAt}).
@@ -219,6 +222,10 @@ handle_info(?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback), State0) ->
     Req = ?REQ(Method, Request, ExpireAt),
     State1 = enqueue_req(ResultCallback, Req, upgrade_requests(State0)),
     State = maybe_shoot(State1),
+    {noreply, State};
+handle_info({suspend, Time}, State) ->
+    %% only for testing
+    timer:sleep(Time),
     {noreply, State};
 handle_info(Info, State0) ->
     State1 = do_handle_info(Info, upgrade_requests(State0)),
@@ -448,7 +455,12 @@ do_request(Client, put, {Path, Headers, Body}) ->
 do_request(Client, delete, {Path, Headers}) ->
     gun:delete(Client, Path, Headers).
 
-cancel_stream(Client, StreamRef) ->
+cancel_stream(fin, _Client, _StreamRef) ->
+    %% nothing to cancel anyway
+    %% otherwise gun will reply with a gun_error messsage
+    %% which is then discarded anyway
+    ok;
+cancel_stream(nofin, Client, StreamRef) ->
     %% this is just an async message sent to gun
     %% the gun stream process does not really cancel
     %% anything, but just mark the receiving process (i.e. self())
@@ -547,19 +559,14 @@ drop_expired(Requests) ->
 drop_expired(#{pending_count := 0} = Requests, _Now) ->
     Requests;
 drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
-    {PeekFun, OutFun} =
-        case maps:get(prioritise_latest, Requests, false) of
-            true ->
-                {fun queue:peek_r/1, fun queue:out_r/1};
-            false ->
-                {fun queue:peek/1, fun queue:out/1}
-        end,
+    {PeekFun, OutFun} = peek_oldest_fn(Requests),
     {value, ?PEND_REQ(ReplyTo, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
     case Now > ExpireAt of
         true ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
             ok = maybe_reply_timeout(ReplyTo),
+            ?tp(?FUNCTION_NAME, #{}),
             drop_expired(NewRequests, Now);
         false ->
             Requests
@@ -581,11 +588,8 @@ enqueue_req(ReplyTo, Req, #state{requests = Requests0} = State) ->
         pending := Pending,
         pending_count := PC
     } = Requests0,
-    NewPending =
-        case maps:get(prioritise_latest, Requests0, false) of
-            true -> queue:in_r(?PEND_REQ(ReplyTo, Req), Pending);
-            false -> queue:in(?PEND_REQ(ReplyTo, Req), Pending)
-        end,
+    InFun = enqueue_latest_fn(Requests0),
+    NewPending = InFun(?PEND_REQ(ReplyTo, Req), Pending),
     Requests = Requests0#{pending := NewPending, pending_count := PC + 1},
     State#state{requests = drop_expired(Requests)}.
 
@@ -595,7 +599,7 @@ maybe_shoot(#state{enable_pipelining = EP, requests = Requests0, client = Client
     State = State0#state{requests = drop_expired(Requests0)},
     %% If the gun http client is down
     ClientDown = is_pid(Client) andalso (not is_process_alive(Client)),
-    %% Or when it too many has been sent already
+    %% Or when too many has been sent already
     case ClientDown orelse should_cool_down(EP, maps:size(Sent)) of
         true ->
             %% Then we should cool down, and let the gun responses
@@ -714,7 +718,7 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             State;
         {expired, NRequests} ->
             %% the call is expired, caller is no longer waiting for a reply
-            ok = cancel_stream(Client, StreamRef),
+            ok = cancel_stream(IsFin, Client, StreamRef),
             State#state{requests = NRequests};
         {?SENT_REQ(ReplyTo, ExpireAt, ?undef), NRequests} ->
             %% gun_response, http head
@@ -755,3 +759,37 @@ reply({F, A}, Result) when is_function(F) ->
     ok;
 reply(From, Result) ->
     gen_server:reply(From, Result).
+
+peek_oldest_fn(#{prioritise_latest := true}) ->
+    {fun queue:peek_r/1, fun queue:out_r/1};
+peek_oldest_fn(_) ->
+    {fun queue:peek/1, fun queue:out/1}.
+
+enqueue_latest_fn(#{prioritise_latest := true}) ->
+    fun queue:in_r/2;
+enqueue_latest_fn(_) ->
+    fun queue:in/2.
+
+-ifdef(TEST).
+
+prioritise_latest_test() ->
+    Opts = #{prioritise_latest => true},
+    Seq = [1, 2, 3, 4],
+    In = enqueue_latest_fn(Opts),
+    {PeekOldest, OutOldest} = peek_oldest_fn(Opts),
+    Q = lists:foldl(fun(I, QIn) -> In(I, QIn) end, queue:new(), Seq),
+    ?assertEqual({value, 1}, PeekOldest(Q)),
+    ?assertMatch({{value, 1}, _}, OutOldest(Q)),
+    ?assertMatch({{value, 4}, _}, queue:out(Q)).
+
+prioritise_oldest_test() ->
+    Opts = #{prioritise_latest => false},
+    Seq = [1, 2, 3, 4],
+    In = enqueue_latest_fn(Opts),
+    {PeekOldest, OutOldest} = peek_oldest_fn(Opts),
+    Q = lists:foldl(fun(I, QIn) -> In(I, QIn) end, queue:new(), Seq),
+    ?assertEqual({value, 1}, PeekOldest(Q)),
+    ?assertMatch({{value, 1}, _}, OutOldest(Q)),
+    ?assertMatch({{value, 1}, _}, queue:out(Q)).
+
+-endif.

@@ -21,6 +21,7 @@
     nolink_apply/2,
     parallel_map/2,
     with_server/2,
+    with_server/3,
     with_server/4,
     with_pool/3,
     pool_opts/2,
@@ -123,6 +124,9 @@ with_server(Port, Name, Delay, F) ->
     with_server(Opts, F).
 
 with_server(Opts, F) ->
+    with_server(Opts, F, _CheckTrace = fun(_, _) -> ok end).
+
+with_server(Opts, F, CheckTrace) ->
     ?check_trace(
         begin
             Pid = ehttpc_server:start_link(Opts),
@@ -141,7 +145,7 @@ with_server(Opts, F) ->
                 ehttpc_server:stop(Pid)
             end
         end,
-        []
+        CheckTrace
     ).
 
 %%------------------------------------------------------------------------------

@@ -37,7 +37,7 @@ init([Pool, Opts]) ->
              #{id => worker_sup,
                start => {ehttpc_worker_sup, start_link, [Pool, Opts]},
                restart => transient,
-               shutdown => infinity,
+               shutdown => 5000,
                type => supervisor,
                modules => [ehttpc_worker_sup]}],
     {ok, {{one_for_all, 10, 100}, Specs}}.
