@@ -429,10 +429,12 @@ gun_opts(Opts) ->
 
 gun_opts([], Acc) ->
     Acc;
-gun_opts([{retry, _} | _Opts], _Acc) ->
-    error({not_allowd_opts, retry});
-gun_opts([{retry_timeout, _} | _Opts], _Acc) ->
-    error({not_allowd_opts, retry_timeout});
+gun_opts([{retry, _} | Opts], Acc) ->
+    %% explicit ignore
+    gun_opts(Opts, Acc);
+gun_opts([{retry_timeout, _} | Opts], Acc) ->
+    %% explicit ignore
+    gun_opts(Opts, Acc);
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
 gun_opts([{transport, Transport} | Opts], Acc) ->
@@ -440,6 +442,7 @@ gun_opts([{transport, Transport} | Opts], Acc) ->
 gun_opts([{transport_opts, TransportOpts} | Opts], Acc) ->
     gun_opts(Opts, Acc#{transport_opts => TransportOpts});
 gun_opts([_ | Opts], Acc) ->
+    %% ignore by default
     gun_opts(Opts, Acc).
 
 do_request(Client, head, {Path, Headers}) ->

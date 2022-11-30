@@ -104,13 +104,11 @@ send_100_test_() ->
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_async(100)) end}
     ].
 
-send_1000_test_() ->
+send_1000_async_pipeline_test_() ->
     TestTimeout = 30,
     Port = ?PORT,
     Opts1 = pool_opts(Port, true),
-    Opts2 = pool_opts(Port, false),
     Opts3 = pool_opts("localhost", Port, true, true),
-    Opts4 = pool_opts("localhost", Port, false, true),
     F = fun(Opts) ->
         fun() ->
             with_server(
@@ -128,8 +126,31 @@ send_1000_test_() ->
     end,
     [
         {timeout, TestTimeout + 1, F(Opts1)},
+        {timeout, TestTimeout + 1, F(Opts3)}
+    ].
+
+send_1000_async_no_pipeline_test_() ->
+    TestTimeout = 30,
+    Port = ?PORT,
+    Opts2 = pool_opts(Port, false),
+    Opts4 = pool_opts("localhost", Port, false, true),
+    F = fun(Opts) ->
+        fun() ->
+            with_server(
+                Port,
+                ?FUNCTION_NAME,
+                0,
+                fun() ->
+                    with_pool(
+                        Opts,
+                        fun() -> req_async(200, timer:seconds(TestTimeout)) end
+                    )
+                end
+            )
+        end
+    end,
+    [
         {timeout, TestTimeout + 1, F(Opts2)},
-        {timeout, TestTimeout + 1, F(Opts3)},
         {timeout, TestTimeout + 1, F(Opts4)}
     ].
 
