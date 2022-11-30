@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.4.2
+
+- Do not crash on `retry` and `retry_timeout` options.
+  They might be persisted somehere, e.g. in an old config, or supervisor's child spec etc.
+
 ## 0.4.1
 
 - Avoid sending stream cancellation messages to the 'gun' process if the stream is already finished ('fin' received)
