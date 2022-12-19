@@ -41,7 +41,6 @@ send_10_sync_test_() ->
     PoolOpts1 = pool_opts(Port1, false),
     PoolOpts2 = pool_opts(Port2, false),
     [
-        %% allow one retry for oneoff=true server, because of the 'DOWN' message race
         {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000)) end},
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_sync(10)) end}
     ].
