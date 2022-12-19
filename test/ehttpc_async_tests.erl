@@ -34,16 +34,10 @@
 ).
 
 send_10_sync_test_() ->
-    Port1 = ?PORT,
-    Port2 = ?PORT,
-    ServerOpts1 = #{port => Port1, name => ?FUNCTION_NAME, delay => {rand, 300}, oneoff => true},
-    ServerOpts2 = #{port => Port2, name => ?FUNCTION_NAME, delay => {rand, 300}, oneoff => false},
-    PoolOpts1 = pool_opts(Port1, false),
-    PoolOpts2 = pool_opts(Port2, false),
-    [
-        {"oneoff=true", fun() -> ?WITH(ServerOpts1, PoolOpts1, req_sync(10, 1000)) end},
-        {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_sync(10)) end}
-    ].
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => {rand, 300}, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    {"oneoff=false", fun() -> ?WITH(ServerOpts, PoolOpts, req_sync(10)) end}.
 
 send_10_async_test() ->
     Port = ?PORT,
