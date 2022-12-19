@@ -63,7 +63,7 @@ no_expired_req_send_test() ->
             %% ensure all the requests are queued
             ok = ehttpc:health_check(Pid, 100),
             %% send another one after a delay, this will trigger ehttpc worker to drop all expired requests and reply {error, timeout}
-            timer:sleep(TimeoutMs),
+            timer:sleep(TimeoutMs * 2),
             [_] = send_reqs(1, TimeoutMs + 10),
             lists:foreach(
                 fun(Ref) ->
