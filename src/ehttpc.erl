@@ -38,6 +38,7 @@
     handle_info/2,
     terminate/2,
     code_change/3,
+    format_status/1,
     format_status/2,
     format_state/2
 ]).
@@ -352,6 +353,12 @@ code_change(_Vsn, State, _) ->
     %% upgrade from a version ahving old format 'requests' field
     {ok, upgrade_requests(State)}.
 
+format_status(Status = #{state := State}) ->
+    Status#{state => format_state(State, minimal)}.
+
+%% TODO
+%% This is deprecated since OTP-25 in favor of `format_status/1`. Remove once
+%% OTP-25 becomes minimum supported OTP version.
 format_status(_Opt, [_PDict, State]) ->
     format_state(State, minimal).
 

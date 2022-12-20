@@ -10,17 +10,25 @@ jobs:
 
   build:
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
 
-    container:
-      image: "ghcr.io/emqx/emqx-builder/5.0:24.1.1-emqx-1-ubuntu20.04"
+    strategy:
+      fail-fast: false
+      matrix:
+        otp:
+          - 24.3
+          - 25.1
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
-        fetch-depth: 1000
+        fetch-depth: 0
     - name: Fetch tags
       run: git fetch --tags
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ matrix.otp }}
+        rebar3-version: 3
     - name: Compile
       run: rebar3 compile
     - name: Run tests

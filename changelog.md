@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.4.3
+
+- Update `gproc` dependency to 0.9.0.
+- Add `format_status/1` for OTP 25.
+
 ## 0.4.2
 
 - Do not crash on `retry` and `retry_timeout` options.
