@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.4.4
+
+- Fix the issue that ehttpc opens a new client when an existing client has been
+  opened but not ready (no `gun_up` received).
+
 ## 0.4.3
 
 - Update `gproc` dependency to 0.9.0.
