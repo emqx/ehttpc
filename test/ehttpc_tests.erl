@@ -258,6 +258,33 @@ health_check_abnormal_test_() ->
                 pool_opts(Port, true),
                 begin
                     Worker = ehttpc_pool:pick_worker(?POOL),
+                    %% 1. Do health_check with very short timeout,
+                    %% The check failed but ehttpc is still trying to establish
+                    %% the connection.
+                    ?assertEqual(
+                        {error, connect_timeout},
+                        ehttpc:health_check(Worker, 0)
+                    ),
+                    %% 2. do health_check again should be OK.
+                    ?assertEqual(ok, ehttpc:health_check(Worker, timer:seconds(2))),
+                    {ok, _} = ?block_until(
+                        #{?snk_kind := health_check_when_gun_client_not_ready},
+                        1000,
+                        infinity
+                    )
+                end
+            )
+        end},
+        {timeout, 20, fun() ->
+            ?WITH(
+                #{
+                    port => Port,
+                    name => ?FUNCTION_NAME,
+                    delay => 0
+                },
+                pool_opts(Port, true),
+                begin
+                    Worker = ehttpc_pool:pick_worker(?POOL),
                     exit(Worker, kill),
                     ?assertMatch(
                         {error, {ehttpc_worker_down, _}},

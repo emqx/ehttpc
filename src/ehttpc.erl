@@ -194,7 +194,7 @@ init([Pool, Id, Opts]) ->
 
 handle_call({health_check, _}, _From, State = #state{gun_state = up}) ->
     {reply, ok, State};
-handle_call({health_check, Timeout}, _From, State = #state{gun_state = down}) ->
+handle_call({health_check, Timeout}, _From, State = #state{client = ?undef, gun_state = down}) ->
     case open(State) of
         {ok, NewState} ->
             do_after_gun_up(
@@ -207,6 +207,17 @@ handle_call({health_check, Timeout}, _From, State = #state{gun_state = down}) ->
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
+handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_state = down}) when
+    is_pid(Client)
+->
+    ?tp(health_check_when_gun_client_not_ready, #{client => Client}),
+    do_after_gun_up(
+        State,
+        now_() + Timeout,
+        fun(State1) ->
+            {reply, ok, State1}
+        end
+    );
 handle_call(?REQ(_Method, _Request, _ExpireAt) = Req, From, State0) ->
     State1 = enqueue_req(From, Req, upgrade_requests(State0)),
     State = maybe_shoot(State1),
