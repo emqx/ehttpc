@@ -262,13 +262,16 @@ health_check_abnormal_test_() ->
                     %% The check failed but ehttpc is still trying to establish
                     %% the connection.
                     ?assertEqual(
-                        {error,connect_timeout},
+                        {error, connect_timeout},
                         ehttpc:health_check(Worker, 0)
                     ),
                     %% 2. do health_check again should be OK.
                     ?assertEqual(ok, ehttpc:health_check(Worker, timer:seconds(2))),
-                    {ok, _} = ?block_until(#{?snk_kind := health_check_when_gun_client_not_ready},
-                                 1000, infinity)
+                    {ok, _} = ?block_until(
+                        #{?snk_kind := health_check_when_gun_client_not_ready},
+                        1000,
+                        infinity
+                    )
                 end
             )
         end},

@@ -207,8 +207,9 @@ handle_call({health_check, Timeout}, _From, State = #state{client = ?undef, gun_
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
-handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_state = down})
-        when is_pid(Client) ->
+handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_state = down}) when
+    is_pid(Client)
+->
     ?tp(health_check_when_gun_client_not_ready, #{client => Client}),
     do_after_gun_up(
         State,
