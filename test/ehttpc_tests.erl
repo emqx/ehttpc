@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
--define(POOL, ?MODULE).
+-define(POOL, <<"testpool">>).
 -define(PORT, (60000 + ?LINE)).
 
 -define(WITH_SERVER(Opts, Expr),

@@ -22,7 +22,7 @@
 
 -export([init/1]).
 
-start_link(Pool, Opts) when is_atom(Pool) ->
+start_link(Pool, Opts) ->
     supervisor:start_link(?MODULE, [Pool, Opts]).
 
 init([Pool, Opts]) ->

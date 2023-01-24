@@ -53,10 +53,10 @@ start_link(Pool, Opts) ->
 info(Pid) ->
     gen_server:call(Pid, info).
 
-start_pool(Pool, Opts) when is_atom(Pool) ->
+start_pool(Pool, Opts) ->
     ehttpc_sup:start_pool(Pool, Opts).
 
-stop_pool(Pool) when is_atom(Pool) ->
+stop_pool(Pool) ->
     ehttpc_sup:stop_pool(Pool).
 
 pick_worker(Pool) ->

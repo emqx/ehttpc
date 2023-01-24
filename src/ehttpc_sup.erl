@@ -29,7 +29,7 @@
 -export([init/1]).
 
 %% @doc Start supervisor.
--spec(start_link() -> {ok, pid()} | {error, term()}).
+-spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
@@ -38,19 +38,19 @@ start_link() ->
 %%--------------------------------------------------------------------
 
 %% @doc Start a pool.
--spec(start_pool(atom(), list(tuple())) -> {ok, pid()} | {error, term()}).
-start_pool(Pool, Opts) when is_atom(Pool) ->
+-spec start_pool(ehttpc:pool_name(), list(tuple())) -> {ok, pid()} | {error, term()}.
+start_pool(Pool, Opts) ->
     supervisor:start_child(?MODULE, pool_spec(Pool, Opts)).
 
 %% @doc Stop a pool.
--spec(stop_pool(Pool :: atom()) -> ok | {error, term()}).
-stop_pool(Pool) when is_atom(Pool) ->
+-spec stop_pool(Pool :: ehttpc:pool_name()) -> ok | {error, term()}.
+stop_pool(Pool) ->
     ChildId = child_id(Pool),
 	case supervisor:terminate_child(?MODULE, ChildId) of
         ok ->
             supervisor:delete_child(?MODULE, ChildId);
-        {error, Reason} ->
-            {error, Reason}
+        {error, not_found} ->
+            ok
 	end.
 
 %%--------------------------------------------------------------------
@@ -69,4 +69,3 @@ pool_spec(Pool, Opts) ->
       modules => [ehttpc_pool_sup]}.
 
 child_id(Pool) -> {ehttpc_pool_sup, Pool}.
-

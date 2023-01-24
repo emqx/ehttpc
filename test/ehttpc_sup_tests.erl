@@ -18,12 +18,11 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(POOL, ?MODULE).
-
 shutdown_test_() ->
     [{timeout, 10, fun t_shutdown/0}].
 
 t_shutdown() ->
+    Pool = atom_to_binary(?MODULE),
     Opts = [
         {host, "google.com"},
         {port, "80"},
@@ -34,17 +33,17 @@ t_shutdown() ->
         {prioritise_latest, true}
     ],
     application:ensure_all_started(ehttpc),
-    {ok, SupPid} = ehttpc_sup:start_pool(?POOL, Opts),
+    {ok, SupPid} = ehttpc_sup:start_pool(Pool, Opts),
     unlink(SupPid),
     _ = monitor(process, SupPid),
-    Worker = ehttpc_pool:pick_worker(?POOL),
+    Worker = ehttpc_pool:pick_worker(Pool),
     try
         _ = monitor(process, Worker),
         _ = sys:get_state(Worker),
         %% suspend (zombie-fy) the (one and only) worker
         Worker ! {suspend, timer:seconds(60)},
         %% zombie worker should not block pool stop
-        ok = ehttpc_sup:stop_pool(?POOL),
+        ok = ehttpc_sup:stop_pool(Pool),
         receive
             {'DOWN', _, process, SupPid, killed} ->
                 ok;
