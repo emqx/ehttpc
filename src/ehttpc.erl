@@ -77,6 +77,7 @@
 ).
 -define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ(_, _, _) = Call}).
 -define(undef, undefined).
+-define(IS_POOL(Pool), (not is_pid(Pool))).
 
 -record(state, {
     pool :: term(),
@@ -91,7 +92,7 @@
     requests :: map()
 }).
 
--type pool_name() :: atom().
+-type pool_name() :: any().
 -type option() :: [{atom(), term()}].
 
 %%--------------------------------------------------------------------
@@ -103,7 +104,7 @@ get_state(PoolOrWorker) ->
     get_state(PoolOrWorker, minimal).
 
 %% @doc For test, debug and troubleshooting.
-get_state(Pool, Style) when is_atom(Pool) ->
+get_state(Pool, Style) when ?IS_POOL(Pool) ->
     Worker = ehttpc_pool:pick_worker(Pool),
     {Worker, get_state(Worker, Style)};
 get_state(Worker, Style) when is_pid(Worker) ->
@@ -131,9 +132,9 @@ request(Pool, Method, Request) ->
 request(Pool, Method, Request, Timeout) ->
     request(Pool, Method, Request, Timeout, 2).
 
-request(Pool, Method, Request, Timeout, Retry) when is_atom(Pool) ->
+request(Pool, Method, Request, Timeout, Retry) when ?IS_POOL(Pool) ->
     request(ehttpc_pool:pick_worker(Pool), Method, Request, Timeout, Retry);
-request({Pool, N}, Method, Request, Timeout, Retry) when is_atom(Pool) ->
+request({Pool, N}, Method, Request, Timeout, Retry) when ?IS_POOL(Pool) ->
     request(ehttpc_pool:pick_worker(Pool, N), Method, Request, Timeout, Retry);
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
     ExpireAt = now_() + Timeout,

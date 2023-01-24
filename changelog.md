@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.5
+
+- Make possible to start pool with `any()` name (not limited to `atom()`).
+
 ## 0.4.4
 
 - Fix the issue that ehttpc opens a new client when an existing client has been
