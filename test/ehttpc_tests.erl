@@ -613,6 +613,18 @@ request_expire_fin_too_late_test() ->
         end
     ).
 
+hash_pool_test() ->
+    Port1 = ?PORT,
+    ServerOpts1 = #{port => Port1, name => ?FUNCTION_NAME, delay => {rand, 300}, oneoff => true},
+    PoolOpts1 = put_pool_opts(pool_opts(Port1, false), pool_type, hash),
+    Send = fun() ->
+        ?assertMatch(
+            {ok, 200, _, _},
+            ehttpc:request({?POOL, self()}, get, req(), 1000, 0)
+        )
+    end,
+    ?WITH(ServerOpts1, PoolOpts1, Send()).
+
 with_server(Port, Name, Delay, F) ->
     ehttpc_test_lib:with_server(Port, Name, Delay, F).
 
@@ -662,6 +674,9 @@ pool_opts(Host, Port, Pipeline) ->
 
 pool_opts(Host, Port, Pipeline, PrioLatest) ->
     ehttpc_test_lib:pool_opts(Host, Port, Pipeline, PrioLatest).
+
+put_pool_opts(Opts, Key, Value) ->
+    [{Key, Value} | lists:keydelete(Key, 1, Opts)].
 
 with_pool(Opts, F) ->
     ehttpc_test_lib:with_pool(?POOL, Opts, F).

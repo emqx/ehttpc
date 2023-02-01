@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.6
+
+- Fix a bug introduced in 0.4.5: `badarg` crash from `grpoc` when `pool_type` is `hash`.
+
 ## 0.4.5
 
 - Make possible to start pool with `any()` name (not limited to `atom()`).

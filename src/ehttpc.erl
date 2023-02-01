@@ -77,7 +77,7 @@
 ).
 -define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ(_, _, _) = Call}).
 -define(undef, undefined).
--define(IS_POOL(Pool), (not is_pid(Pool))).
+-define(IS_POOL(Pool), (not is_tuple(Pool) andalso not is_pid(Pool))).
 
 -record(state, {
     pool :: term(),
