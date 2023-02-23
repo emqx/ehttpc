@@ -96,12 +96,10 @@ loop(Socket, Opts) ->
 loop(Socket, Opts, Buffer) ->
     Delay0 = maps:get(delay, Opts, 0),
     case gen_tcp:recv(Socket, 0) of
-        {ok, Data} ->
-            Split = binary:split(
-                <<Buffer/binary, Data/binary>>,
-                <<"\r\n\r\n">>,
-                [global]
-            ),
+        {ok, Data0} ->
+            Data1 = <<Buffer/binary, Data0/binary>>,
+            Data = drop_last_chunk(Data1),
+            Split = binary:split(Data, <<"\r\n\r\n">>, [global]),
             {N, Buffer2} = count_requests(Split, 0),
             Responses = make_responses(N, Opts),
             Ms =
@@ -225,3 +223,19 @@ make_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->
     Count > 255 andalso error({bad_chunk_count, Count}),
     RawL = [iolist_to_binary(lists:duplicate(Size, I)) || I <- lists:seq(1, Count)],
     [cow_http_te:chunk(I) || I <- RawL] ++ [cow_http_te:last_chunk()].
+
+drop_last_chunk(Data) ->
+    case re:run(Data, <<"transfer-encoding:.*chunked">>, [caseless]) of
+        nomatch ->
+            Data;
+        _ ->
+            Size = byte_size(Data),
+            LastChunk = cow_http_te:last_chunk(),
+            LastChunkSize = byte_size(LastChunk),
+            case Size >= LastChunkSize andalso LastChunk =:= binary:part(Data, {Size, -LastChunkSize}) of
+                true ->
+                    binary:part(Data, 0, Size - LastChunkSize);
+                false ->
+                    Data
+            end
+    end.
