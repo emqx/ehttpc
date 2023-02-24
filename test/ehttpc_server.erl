@@ -68,13 +68,6 @@ accept(LSocket, Opts) ->
             ok
     end.
 
-count_requests([<<>>], N) ->
-    {N, <<>>};
-count_requests([Buffer], N) ->
-    {N, Buffer};
-count_requests([_ | T], N) ->
-    count_requests(T, N + 1).
-
 listen(Port) ->
     Self = self(),
     spawn_link(fun() ->
@@ -91,40 +84,100 @@ listen(Port) ->
     end.
 
 loop(Socket, Opts) ->
-    loop(Socket, Opts, <<>>).
+    loop(fetch_header, Socket, Opts, <<>>).
 
-loop(Socket, Opts, Buffer) ->
-    Delay0 = maps:get(delay, Opts, 0),
+
+loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Buffer) ->
+    case string:find(Buffer, <<"\r\n\r\n">>) of
+        nomatch -> 
+            loop(fetch_header, Socket, Opts, Buffer);
+        _Match -> 
+            loop(parse_header, Socket, Opts, Buffer)
+    end;
+loop(fetch_header, Socket, Opts, Buffer) ->
+    %% Read data until we get a double new line
+    %% This means that we have received the header and can go on to parse the header
     case gen_tcp:recv(Socket, 0) of
-        {ok, Data} ->
-            Split = binary:split(
-                <<Buffer/binary, Data/binary>>,
-                <<"\r\n\r\n">>,
-                [global]
-            ),
-            {N, Buffer2} = count_requests(Split, 0),
-            Responses = make_responses(N, Opts),
-            Ms =
-                case Delay0 of
-                    {rand, D} -> rand:uniform(D);
-                    _ -> Delay0
-                end,
-            Ms > 0 andalso delay(Socket, Ms),
-            case socket_send(Socket, Responses, Opts) of
-                ok ->
-                    case maps:get(oneoff, Opts, false) of
-                        true ->
-                            gen_tcp:shutdown(Socket, write),
-                            exit(normal);
-                        false ->
-                            ok
-                    end,
-                    loop(Socket, Opts, Buffer2);
-                {error, _Reason} ->
-                    ok
-            end;
+        {ok, Data0} ->
+            Data1 = <<Buffer/binary, Data0/binary>>,
+            loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Data1);
         {error, _Reason} ->
             ok
+    end;
+loop(parse_header, Socket, Opts, Buffer) ->
+    [Header | Rest] =
+         binary:split(Buffer, <<"\r\n\r\n">>, []),
+    NewBuffer =
+        case re:run(Header, <<"transfer-encoding:.*chunked">>, [caseless]) of
+            nomatch ->
+                BytesLeftToRead = get_body_length(Header),
+                read_normal_body(Socket, iolist_to_binary(Rest), BytesLeftToRead);
+            _ ->
+                read_chunked_body(Socket, iolist_to_binary(Rest))
+        end,
+    IsHead = 
+        case re:run(Header, <<"^HEAD ">>, [caseless]) of
+            nomatch ->
+                false;
+            _ ->
+                true
+        end,
+    loop_send_response(Socket, Opts, NewBuffer, IsHead).
+
+loop_send_response(Socket, Opts, Buffer, IsHead) ->
+    Response = make_response(Opts, IsHead),
+    Delay0 = maps:get(delay, Opts, 0),
+    Ms =
+        case Delay0 of
+            {rand, D} -> rand:uniform(D);
+            _ -> Delay0
+        end,
+    Ms > 0 andalso delay(Socket, Ms),
+    case socket_send(Socket, Response, Opts) of
+        ok ->
+            case maps:get(oneoff, Opts, false) of
+                true ->
+                    gen_tcp:shutdown(Socket, write),
+                    exit(normal);
+                false ->
+                    ok
+            end,
+            loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Buffer);
+        {error, _Reason} ->
+            ok
+    end.
+
+get_body_length(Header) ->
+    case re:run(Header, <<"content-length:.*(\\d+)">>, [caseless]) of
+        nomatch -> 0;
+        {match,[_,{Pos,Len}|_]} ->
+            binary_to_integer(iolist_to_binary(string:substr(binary_to_list(Header), Pos+1,Len)))
+    end.
+
+
+read_normal_body(_Socket, Buffer, BytesLeftToRead)  when size(Buffer) >= BytesLeftToRead ->
+    <<_:BytesLeftToRead/binary,Rest/binary>> = Buffer,
+    Rest;
+read_normal_body(Socket, Buffer, BytesLeftToRead) ->
+    case gen_tcp:recv(Socket, 0) of
+        {ok, Data} ->
+            NewBuffer = <<Buffer/binary, Data/binary>>,
+            read_normal_body(Socket, NewBuffer, BytesLeftToRead)
+    end.
+
+read_chunked_body(Socket, Buffer) ->
+    %% check if buffer contains end chunk (very hacky)
+    LastChunk = <<"0\r\n\r\n">>,
+    case string:find(Buffer, LastChunk) of
+        nomatch ->
+            %% Get some more data and try again
+            case gen_tcp:recv(Socket, 0) of
+                {ok, Data} ->
+                    NewBuffer = <<Buffer/binary, Data/binary>>,
+                    read_chunked_body(Socket, NewBuffer)
+            end;
+        RemainingPlusLastChunk -> 
+            iolist_to_binary(string:slice(RemainingPlusLastChunk, string:length(LastChunk)))
     end.
 
 delay(Socket, Timeout) ->
@@ -137,17 +190,12 @@ delay(Socket, Timeout) ->
         ok
     end.
 
-socket_send(_Socket, [], _Opts) ->
-    ok;
 socket_send(
     Socket,
-    [
         #{
             headers := Headers,
             body_chunks := BodyChunks
-        }
-        | Rest
-    ],
+        },
     Opts
 ) ->
     ChunkedDelay =
@@ -168,7 +216,7 @@ socket_send(
         ok ->
             case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay) of
                 ok ->
-                    socket_send(Socket, Rest, Opts);
+                    ok;
                 {error, Reason} ->
                     {error, Reason}
             end;
@@ -195,9 +243,7 @@ socket_send_body_chunks(Socket, [H | T], Delay, FinDelay) ->
             {error, Reason}
     end.
 
-make_responses(0, _Opts) ->
-    [];
-make_responses(N, Opts) ->
+make_response(Opts, IsHead) ->
     Headers0 =
         [
             "HTTP/1.1 200 OK\r\n",
@@ -207,18 +253,27 @@ make_responses(N, Opts) ->
     {MoreHeaders, BodyChunks} =
         case Opts of
             #{chunked := _} ->
-                {["Transfer-Encoding: chunked", "\r\n", "\r\n"], make_chunks(Opts)};
+                Chunks =
+                    case IsHead of
+                        true -> [];
+                        false -> make_chunks(Opts)
+                    end,
+                {["Transfer-Encoding: chunked", "\r\n", "\r\n"], Chunks};
             _ ->
-                Body = iolist_to_binary(lists:duplicate(100, 0)),
+                Body = 
+                    case IsHead of
+                        true -> [];
+                        false -> [iolist_to_binary(lists:duplicate(100, 0))]
+                    end,
                 Len = integer_to_list(iolist_size(Body)),
-                {["Content-Length: ", Len, "\r\n", "\r\n"], [Body]}
+                {["Content-Length: ", Len, "\r\n", "\r\n"], Body}
         end,
     Headers = Headers0 ++ MoreHeaders,
     Resp = #{
         headers => Headers,
         body_chunks => BodyChunks
     },
-    [Resp | make_responses(N - 1, Opts)].
+    Resp.
 
 make_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->
     %% we use the counts to generat bytes, (to verify the final number of chunks received)

@@ -95,7 +95,7 @@ kill_gun_resume_test() ->
 send_100_test_() ->
     Port = ?PORT,
     ServerOpts1 = #{port => Port, name => ?FUNCTION_NAME, delay => 3, oneoff => true},
-    ServerOpts2 = #{port => Port, name => ?FUNCTION_NAME, delay => {rand, 300}, oneoff => false},
+    ServerOpts2 = #{port => Port, name => ?FUNCTION_NAME, delay => {rand, 3}, oneoff => false},
     PoolOpts1 = pool_opts(Port, false),
     PoolOpts2 = pool_opts(Port, true),
     [
@@ -690,3 +690,64 @@ dedup(L) ->
 dedup(H, []) -> [H];
 dedup(H, [H | T]) -> dedup(H, T);
 dedup(H, [X | T]) -> [H | dedup(X, T)].
+
+%% Test case to check that requests are finished as they should be even when
+%% there is no body and headers indicate that there should be a body. The gun
+%% library handles this in a special way. See
+%% https://ninenines.eu/docs/en/gun/1.3/manual/gun.data/ and
+%% https://github.com/ninenines/gun/issues/141
+no_body_but_headers_indicating_body_test_() ->
+    snabbkaffe:fix_ct_logging(),
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME,  oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    RequestsWithBody =
+        fun() ->
+                [begin
+                     Response1 = ehttpc:request(?POOL,
+                                                RequestType,
+                                                {<<"/">>, [{<<"content-type">>, <<"text/html">>}], <<>>},
+                                                5000,
+                                                0),
+                     ok = ensure_not_error_response(Response1),
+                     Response2 = ehttpc:request(?POOL,
+                                                RequestType,
+                                                {<<"/">>, [{<<"content-length">>, <<"0">>}], <<>>},
+                                                5000,
+                                                0),
+                     ok = ensure_not_error_response(Response2)
+                 end ||
+                 RequestType <- [put, post]]
+        end,
+    RequestsWithNoBody =
+        fun() ->
+            [begin 
+                 Response1 = ehttpc:request(?POOL,
+                                            RequestType,
+                                            {<<"/">>, [{<<"content-type">>, <<"text/html">>}]},
+                                            5000,
+                                            0),
+                 ok = ensure_not_error_response(Response1),
+                 Response2 = ehttpc:request(?POOL,
+                                            RequestType,
+                                            {<<"/">>, [{<<"content-length">>, <<"0">>}]},
+                                            5000,
+                                            0),
+                 ok = ensure_not_error_response(Response2)
+             end ||
+             %% Extra get inthe end so all requests have a request comming after them.
+            RequestType <- [get, delete, head, get]]
+        end,
+    TestFunction = 
+        fun() ->
+                RequestsWithBody(),
+                RequestsWithNoBody()
+        end,
+    [
+        fun() -> ?WITH(ServerOpts, PoolOpts, TestFunction()) end
+    ].
+
+ensure_not_error_response({error, _Reason} = Error) ->
+    Error; 
+ensure_not_error_response(_) ->
+    ok.

@@ -465,17 +465,68 @@ gun_opts([_ | Opts], Acc) ->
     gun_opts(Opts, Acc).
 
 do_request(Client, head, {Path, Headers}) ->
-    gun:head(Client, Path, Headers);
+    RequestRef = gun:head(Client, Path, Headers),
+    finish_body_call_if_needed(Client, RequestRef, Headers, <<>>),
+    RequestRef;
 do_request(Client, head, Path) ->
     do_request(Client, head, {Path, []});
 do_request(Client, get, {Path, Headers}) ->
-    gun:get(Client, Path, Headers);
+    RequestRef = gun:get(Client, Path, Headers),
+    finish_body_call_if_needed(Client, RequestRef, Headers, <<>>),
+    RequestRef;
 do_request(Client, post, {Path, Headers, Body}) ->
-    gun:post(Client, Path, Headers, Body);
+    RequestRef = gun:post(Client, Path, Headers, Body),
+    finish_body_call_if_needed(Client, RequestRef, Headers, Body),
+    RequestRef;
 do_request(Client, put, {Path, Headers, Body}) ->
-    gun:put(Client, Path, Headers, Body);
+    RequestRef = gun:put(Client, Path, Headers, Body),
+    finish_body_call_if_needed(Client, RequestRef, Headers, Body),
+    RequestRef;
 do_request(Client, delete, {Path, Headers}) ->
-    gun:delete(Client, Path, Headers).
+    RequestRef = gun:delete(Client, Path, Headers),
+    finish_body_call_if_needed(Client, RequestRef, Headers, <<>>),
+    RequestRef.
+
+%% Finish the request only if the headers are set so that gun expect body data
+%% to come with calls to gun:data/4. Otherwise, subsequent request will fail
+%% with a function clause error.
+finish_body_call_if_needed(Client, RequestRef, Headers, Body) ->
+    case is_finish_body_call_needed(Headers, Body) of
+        true ->
+            gun:data(Client, RequestRef, fin, <<>>);
+        false -> 
+            ok
+    end.
+
+
+%% The following function corresponds to request_io_from_headers from
+%% src/gun_http.erl https://github.com/ninenines/gun commit id
+%% 47ec03dcf0346ad827e5c8aa8c2bf9ac35398afe
+%%
+%% Gun checks the headers (in the same way as the following function) to detect
+%% if more data is expected to be provided after the initial request with
+%% gun:data/4.
+is_finish_body_call_needed(Headers, <<>>) ->
+    case lists:keyfind(<<"content-length">>, 1, Headers) of
+        {_, <<"0">>} ->
+            false;
+        {_, _Length} ->
+            true;
+        false ->
+            is_content_type_field_set(Headers)
+    end;
+%% Gun always finish the request if the body parameter (iodata()) is something
+%% else than an empty binary. This means that, for example, gun:post(Client,
+%% Path, [{<<"content-type">>, <<datat>>}], <<>>) and gun:post(Client, Path,
+%% [{<<"content-type">>, <<datat>>}], []) are not equivalent.
+is_finish_body_call_needed(_Headers, _NotEmptyBin) ->
+    false.
+
+is_content_type_field_set(Headers) ->
+    case lists:keymember(<<"content-type">>, 1, Headers) of
+        true -> true;
+        false ->false 
+    end.
 
 cancel_stream(fin, _Client, _StreamRef) ->
     %% nothing to cancel anyway
