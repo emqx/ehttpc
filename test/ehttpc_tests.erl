@@ -699,55 +699,67 @@ dedup(H, [X | T]) -> [H | dedup(X, T)].
 no_body_but_headers_indicating_body_test_() ->
     snabbkaffe:fix_ct_logging(),
     Port = ?PORT,
-    ServerOpts = #{port => Port, name => ?FUNCTION_NAME,  oneoff => false},
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, oneoff => false},
     PoolOpts = pool_opts(Port, false),
     RequestsWithBody =
         fun() ->
-                [begin
-                     Response1 = ehttpc:request(?POOL,
-                                                RequestType,
-                                                {<<"/">>, [{<<"content-type">>, <<"text/html">>}], <<>>},
-                                                5000,
-                                                0),
-                     ok = ensure_not_error_response(Response1),
-                     Response2 = ehttpc:request(?POOL,
-                                                RequestType,
-                                                {<<"/">>, [{<<"content-length">>, <<"0">>}], <<>>},
-                                                5000,
-                                                0),
-                     ok = ensure_not_error_response(Response2)
-                 end ||
-                 RequestType <- [put, post]]
+            [
+                begin
+                    Response1 = ehttpc:request(
+                        ?POOL,
+                        RequestType,
+                        {<<"/">>, [{<<"content-type">>, <<"text/html">>}], <<>>},
+                        5000,
+                        0
+                    ),
+                    ok = ensure_not_error_response(Response1),
+                    Response2 = ehttpc:request(
+                        ?POOL,
+                        RequestType,
+                        {<<"/">>, [{<<"content-length">>, <<"0">>}], <<>>},
+                        5000,
+                        0
+                    ),
+                    ok = ensure_not_error_response(Response2)
+                end
+             || RequestType <- [put, post]
+            ]
         end,
     RequestsWithNoBody =
         fun() ->
-            [begin 
-                 Response1 = ehttpc:request(?POOL,
-                                            RequestType,
-                                            {<<"/">>, [{<<"content-type">>, <<"text/html">>}]},
-                                            5000,
-                                            0),
-                 ok = ensure_not_error_response(Response1),
-                 Response2 = ehttpc:request(?POOL,
-                                            RequestType,
-                                            {<<"/">>, [{<<"content-length">>, <<"0">>}]},
-                                            5000,
-                                            0),
-                 ok = ensure_not_error_response(Response2)
-             end ||
-             %% Extra get inthe end so all requests have a request comming after them.
-            RequestType <- [get, delete, head, get]]
+            [
+                begin
+                    Response1 = ehttpc:request(
+                        ?POOL,
+                        RequestType,
+                        {<<"/">>, [{<<"content-type">>, <<"text/html">>}]},
+                        5000,
+                        0
+                    ),
+                    ok = ensure_not_error_response(Response1),
+                    Response2 = ehttpc:request(
+                        ?POOL,
+                        RequestType,
+                        {<<"/">>, [{<<"content-length">>, <<"0">>}]},
+                        5000,
+                        0
+                    ),
+                    ok = ensure_not_error_response(Response2)
+                end
+             || %% Extra get inthe end so all requests have a request comming after them.
+                RequestType <- [get, delete, head, get]
+            ]
         end,
-    TestFunction = 
+    TestFunction =
         fun() ->
-                RequestsWithBody(),
-                RequestsWithNoBody()
+            RequestsWithBody(),
+            RequestsWithNoBody()
         end,
     [
         fun() -> ?WITH(ServerOpts, PoolOpts, TestFunction()) end
     ].
 
 ensure_not_error_response({error, _Reason} = Error) ->
-    Error; 
+    Error;
 ensure_not_error_response(_) ->
     ok.

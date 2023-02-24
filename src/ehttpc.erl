@@ -494,10 +494,9 @@ finish_body_call_if_needed(Client, RequestRef, Headers, Body) ->
     case is_finish_body_call_needed(Headers, Body) of
         true ->
             gun:data(Client, RequestRef, fin, <<>>);
-        false -> 
+        false ->
             ok
     end.
-
 
 %% The following function corresponds to request_io_from_headers from
 %% src/gun_http.erl https://github.com/ninenines/gun commit id
@@ -525,7 +524,7 @@ is_finish_body_call_needed(_Headers, _NotEmptyBin) ->
 is_content_type_field_set(Headers) ->
     case lists:keymember(<<"content-type">>, 1, Headers) of
         true -> true;
-        false ->false 
+        false -> false
     end.
 
 cancel_stream(fin, _Client, _StreamRef) ->

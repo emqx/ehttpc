@@ -86,12 +86,11 @@ listen(Port) ->
 loop(Socket, Opts) ->
     loop(fetch_header, Socket, Opts, <<>>).
 
-
 loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Buffer) ->
     case string:find(Buffer, <<"\r\n\r\n">>) of
-        nomatch -> 
+        nomatch ->
             loop(fetch_header, Socket, Opts, Buffer);
-        _Match -> 
+        _Match ->
             loop(parse_header, Socket, Opts, Buffer)
     end;
 loop(fetch_header, Socket, Opts, Buffer) ->
@@ -106,7 +105,7 @@ loop(fetch_header, Socket, Opts, Buffer) ->
     end;
 loop(parse_header, Socket, Opts, Buffer) ->
     [Header | Rest] =
-         binary:split(Buffer, <<"\r\n\r\n">>, []),
+        binary:split(Buffer, <<"\r\n\r\n">>, []),
     NewBuffer =
         case re:run(Header, <<"transfer-encoding:.*chunked">>, [caseless]) of
             nomatch ->
@@ -115,7 +114,7 @@ loop(parse_header, Socket, Opts, Buffer) ->
             _ ->
                 read_chunked_body(Socket, iolist_to_binary(Rest))
         end,
-    IsHead = 
+    IsHead =
         case re:run(Header, <<"^HEAD ">>, [caseless]) of
             nomatch ->
                 false;
@@ -149,14 +148,14 @@ loop_send_response(Socket, Opts, Buffer, IsHead) ->
 
 get_body_length(Header) ->
     case re:run(Header, <<"content-length:.*(\\d+)">>, [caseless]) of
-        nomatch -> 0;
-        {match,[_,{Pos,Len}|_]} ->
-            binary_to_integer(iolist_to_binary(string:substr(binary_to_list(Header), Pos+1,Len)))
+        nomatch ->
+            0;
+        {match, [_, {Pos, Len} | _]} ->
+            binary_to_integer(iolist_to_binary(string:substr(binary_to_list(Header), Pos + 1, Len)))
     end.
 
-
-read_normal_body(_Socket, Buffer, BytesLeftToRead)  when size(Buffer) >= BytesLeftToRead ->
-    <<_:BytesLeftToRead/binary,Rest/binary>> = Buffer,
+read_normal_body(_Socket, Buffer, BytesLeftToRead) when size(Buffer) >= BytesLeftToRead ->
+    <<_:BytesLeftToRead/binary, Rest/binary>> = Buffer,
     Rest;
 read_normal_body(Socket, Buffer, BytesLeftToRead) ->
     case gen_tcp:recv(Socket, 0) of
@@ -176,7 +175,7 @@ read_chunked_body(Socket, Buffer) ->
                     NewBuffer = <<Buffer/binary, Data/binary>>,
                     read_chunked_body(Socket, NewBuffer)
             end;
-        RemainingPlusLastChunk -> 
+        RemainingPlusLastChunk ->
             iolist_to_binary(string:slice(RemainingPlusLastChunk, string:length(LastChunk)))
     end.
 
@@ -192,10 +191,10 @@ delay(Socket, Timeout) ->
 
 socket_send(
     Socket,
-        #{
-            headers := Headers,
-            body_chunks := BodyChunks
-        },
+    #{
+        headers := Headers,
+        body_chunks := BodyChunks
+    },
     Opts
 ) ->
     ChunkedDelay =
@@ -260,7 +259,7 @@ make_response(Opts, IsHead) ->
                     end,
                 {["Transfer-Encoding: chunked", "\r\n", "\r\n"], Chunks};
             _ ->
-                Body = 
+                Body =
                     case IsHead of
                         true -> [];
                         false -> [iolist_to_binary(lists:duplicate(100, 0))]
