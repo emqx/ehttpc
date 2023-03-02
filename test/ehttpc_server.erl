@@ -101,6 +101,7 @@ loop(fetch_header, Socket, Opts, Buffer) ->
             Data1 = <<Buffer/binary, Data0/binary>>,
             loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Data1);
         {error, _Reason} ->
+            %% socket closed ? stop looping
             ok
     end;
 loop(parse_header, Socket, Opts, Buffer) ->
@@ -143,6 +144,7 @@ loop_send_response(Socket, Opts, Buffer, IsHead) ->
             end,
             loop(check_header_and_continue_fetch_if_not_ready, Socket, Opts, Buffer);
         {error, _Reason} ->
+            %% socket closed ? stop looping
             ok
     end.
 
