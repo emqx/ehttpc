@@ -522,10 +522,7 @@ is_finish_body_call_needed(_Headers, _NotEmptyBin) ->
     false.
 
 is_content_type_field_set(Headers) ->
-    case lists:keymember(<<"content-type">>, 1, Headers) of
-        true -> true;
-        false -> false
-    end.
+    lists:keymember(<<"content-type">>, 1, Headers).
 
 cancel_stream(fin, _Client, _StreamRef) ->
     %% nothing to cancel anyway
