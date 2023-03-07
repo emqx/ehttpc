@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.7
+
+- Fix crash when using body headers and no body. When one sent a message with, for example, the content-type header and no body, the underlying gun library would expect a body to come with a gun:data/3 call and would not finish the request. The next request would then crash. See the following issue for more information: https://github.com/ninenines/gun/issues/141
+
 ## 0.4.6
 
 - Fix a bug introduced in 0.4.5: `badarg` crash from `grpoc` when `pool_type` is `hash`.
