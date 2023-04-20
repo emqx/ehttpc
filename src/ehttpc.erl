@@ -141,6 +141,15 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
     try gen_server:call(Worker, ?REQ(Method, Request, ExpireAt), Timeout + 500) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
+
+        %% If `Reason' = `normal', we should just retry without
+        %% consuming a retry credit, as it could be a race condition
+        %% where the gun process is down (e.g.: when the server closes
+        %% the connection), and then requests would be ignored while
+        %% the `gun' process is terminating.
+        {error, normal} ->
+            ?tp(ehttpc_retry_gun_down_normal, #{}),
+            request(Worker, Method, Request, Timeout, Retry);
         {error, Reason} when Retry < 1 ->
             {error, Reason};
         {error, _} ->

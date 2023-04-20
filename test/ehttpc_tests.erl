@@ -759,6 +759,87 @@ no_body_but_headers_indicating_body_test_() ->
         fun() -> ?WITH(ServerOpts, PoolOpts, TestFunction()) end
     ].
 
+gun_down_with_reason_normal_is_retried_test() ->
+    Port = ?PORT,
+    Host = "127.0.0.1",
+    ok = snabbkaffe:start_trace(),
+    with_server(
+        #{
+            port => Port,
+            name => ?FUNCTION_NAME,
+            delay => 1000
+        },
+        fun() ->
+            ?WITH_POOL(
+                pool_opts(Host, Port, _Pipelining = 2),
+                begin
+                    ?force_ordering(
+                        #{?snk_kind := shot},
+                        #{?snk_kind := will_disconnect}
+                    ),
+                    TestPid = self(),
+                    spawn_link(fun() ->
+                        ?tp(will_disconnect, #{}),
+                        [
+                            begin
+                                Ref = monitor(process, P),
+                                sys:terminate(P, normal),
+                                receive
+                                    {'DOWN', Ref, _, _, _} -> ok
+                                after 500 -> ct:fail("gun didn't die")
+                                end,
+                                ok
+                            end
+                         || P <- processes(),
+                            case proc_lib:initial_call(P) of
+                                {gun, proc_lib_hack, _} -> true;
+                                _ -> false
+                            end
+                        ],
+                        ok
+                    end),
+                    spawn_link(fun() ->
+                        Res = ehttpc:request(?POOL, get, req(), 2000, 0),
+                        TestPid ! {result, Res}
+                    end),
+                    Res =
+                        receive
+                            {result, R} -> R
+                        after 2_000 -> ct:fail("no response")
+                        end,
+                    ?assertMatch({ok, 200, _, _}, Res),
+                    ok
+                end
+            )
+        end,
+        fun(Trace0) ->
+            Trace = ?of_kind(
+                [
+                    gun_up,
+                    shot,
+                    handle_client_down,
+                    ehttpc_retry_gun_down_normal
+                ],
+                Trace0
+            ),
+            ?assertMatch(
+                %% first attempt
+                [
+                    gun_up,
+                    shot,
+                    handle_client_down,
+                    %% we retry because of this particularly unusual race condition
+                    ehttpc_retry_gun_down_normal,
+                    gun_up,
+                    shot
+                ],
+                ?projection(?snk_kind, Trace)
+            ),
+            ok
+        end
+    ),
+    ok.
+
 ensure_not_error_response({error, _Reason} = Error) ->
     Error;
 ensure_not_error_response(_) ->

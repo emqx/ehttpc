@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.8
+
+- Fix an issue where a race condition would yield an `{error, normal}` return value.  This can be caused when the `gun` process terminates when the remote server closes the connection for whatever reason.  In this case, we simply retry without consuming "retry credits".
+
 ## 0.4.7
 
 - Fix crash when using body headers and no body. When one sent a message with, for example, the content-type header and no body, the underlying gun library would expect a body to come with a gun:data/3 call and would not finish the request. The next request would then crash. See the following issue for more information: https://github.com/ninenines/gun/issues/141
