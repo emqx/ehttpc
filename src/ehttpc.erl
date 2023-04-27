@@ -142,12 +142,12 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
 
-        %% If `Reason' = `normal', we should just retry without
-        %% consuming a retry credit, as it could be a race condition
-        %% where the gun process is down (e.g.: when the server closes
-        %% the connection), and then requests would be ignored while
-        %% the `gun' process is terminating.
-        {error, normal} ->
+        %% If `Reason' = `gun_down_before_sent', we should just retry
+        %% without consuming a retry credit, as it could be a race
+        %% condition where the gun process is down (e.g.: when the
+        %% server closes the connection), and then requests would be
+        %% ignored while the `gun' process is terminating.
+        {error, gun_down_before_sent} ->
             ?tp(ehttpc_retry_gun_down_normal, #{}),
             request(Worker, Method, Request, Timeout, Retry);
         {error, Reason} when Retry < 1 ->
@@ -294,9 +294,18 @@ do_handle_info(
     NewState = handle_gun_down(State, KilledStreams, Reason),
     NewState;
 do_handle_info(
-    {'DOWN', MRef, process, Client, Reason},
+    {'DOWN', MRef, process, Client, Reason0},
     State = #state{mref = MRef, client = Client}
 ) ->
+    %% If there are pending sent requests when the server closes the
+    %% remote connection for whatever reason, which corresponds to
+    %% `Reason = normal', we should retry the request without
+    %% consuming a "retry credit".
+    Reason =
+        case Reason0 of
+            normal -> gun_down_before_sent;
+            _ -> Reason0
+        end,
     handle_client_down(State, Reason);
 do_handle_info(Info, State) ->
     ?LOG(warning, "~p unexpected_info: ~p, client: ~p", [?MODULE, Info, State#state.client]),
