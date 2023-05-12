@@ -122,6 +122,13 @@ health_check(Worker, Timeout) ->
     catch
         exit:{timeout, _Details} ->
             {error, timeout};
+        exit:Reason when
+            Reason =:= normal;
+            Reason =:= {shutdown, normal}
+        ->
+            %% Race condition: gun went down while checking health?
+            %% Try again.
+            health_check(Worker, Timeout);
         exit:Reason ->
             {error, {ehttpc_worker_down, Reason}}
     end.
@@ -147,7 +154,10 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
         %% where the gun process is down (e.g.: when the server closes
         %% the connection), and then requests would be ignored while
         %% the `gun' process is terminating.
-        {error, normal} ->
+        {error, Reason} when
+            Reason =:= normal;
+            Reason =:= {shutdown, normal}
+        ->
             ?tp(ehttpc_retry_gun_down_normal, #{}),
             request(Worker, Method, Request, Timeout, Retry);
         {error, Reason} when Retry < 1 ->
