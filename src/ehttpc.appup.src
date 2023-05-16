@@ -1,6 +1,9 @@
 %% -*- mode: erlang -*-
-{"0.4.8",
+{"0.4.9",
    [
+     {"0.4.8", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
      {"0.4.7", [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
@@ -13,18 +16,21 @@
      {<<"0\\.4\\.[0-4]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
      {"0.3.0", [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
      {<<"0\\.2\\.[0-1]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
@@ -45,11 +51,15 @@
      {"0.1.15", [
        {update, ehttpc, {advanced, []}},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]}
    ],
    [
+    {"0.4.8", [
+       {load_module, ehttpc, brutal_purge, soft_purge, []}
+     ]},
     {"0.4.7", [
        {load_module, ehttpc, brutal_purge, soft_purge, []}
      ]},
@@ -62,18 +72,21 @@
      {<<"0\\.4\\.[0-4]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
      {"0.3.0", [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
      {<<"0\\.2\\.[0-1]">>, [
        {load_module, ehttpc, brutal_purge, soft_purge, []},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]},
@@ -101,6 +114,7 @@
      {"0.1.15", [
        {update, ehttpc, {advanced, [downgrade_requests]}},
        {load_module, ehttpc_sup, brutal_purge, soft_purge, []},
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []},
        {load_module, ehttpc_pool_sup, brutal_purge, soft_purge, []},
        {load_module, ehttpc_worker_sup, brutal_purge, soft_purge, []}
      ]}
