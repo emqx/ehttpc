@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.9
+
+- Expanded the fix from 0.4.8 to also account for `{error, {shutdown, normal}}` return values in requests, and added a similar retry when the health check also fails with those two reasons.
+
 ## 0.4.8
 
 - Fix an issue where a race condition would yield an `{error, normal}` return value.  This can be caused when the `gun` process terminates when the remote server closes the connection for whatever reason.  In this case, we simply retry without consuming "retry credits".
