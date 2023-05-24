@@ -154,13 +154,13 @@ send_1000_async_no_pipeline_test_() ->
         {timeout, TestTimeout + 1, F(Opts4)}
     ].
 
-requst_timeout_test_() ->
+request_timeout_test_() ->
     [
-        {"pipeline", fun() -> requst_timeout_test(true) end},
-        {"no pipeline", fun() -> requst_timeout_test(false) end}
+        {"pipeline", fun() -> request_timeout_test(true) end},
+        {"no pipeline", fun() -> request_timeout_test(false) end}
     ].
 
-requst_timeout_test(Pipeline) ->
+request_timeout_test(Pipeline) ->
     Port = ?PORT,
     with_server(
         Port,
@@ -179,7 +179,7 @@ requst_timeout_test(Pipeline) ->
         end
     ).
 
-requst_expire_test() ->
+request_expire_test() ->
     Port = ?PORT,
     with_server(
         Port,
@@ -194,6 +194,38 @@ requst_expire_test() ->
                     exit(Pid, kill),
                     ok
                 end
+            )
+        end
+    ).
+
+request_infinity_expire_sync_test() ->
+    ct:timetrap({seconds, 10}),
+    Port = ?PORT,
+    with_server(
+        Port,
+        ?FUNCTION_NAME,
+        1_000,
+        fun() ->
+            with_pool(
+                pool_opts(Port, true),
+                fun() ->
+                    {ok, 200, _, _} = req_sync_1(infinity)
+                end
+            )
+        end
+    ).
+
+request_infinity_expire_async_test() ->
+    ct:timetrap({seconds, 10}),
+    Port = ?PORT,
+    with_server(
+        Port,
+        ?FUNCTION_NAME,
+        1_000,
+        fun() ->
+            with_pool(
+                pool_opts(Port, true),
+                fun() -> req_async1(_Timeout = infinity) end
             )
         end
     ).
@@ -544,7 +576,7 @@ connect_timeout_test() ->
         ?assertEqual({error, connect_timeout}, req_sync_1(_Timeout = 200))
     ).
 
-request_expire_test() ->
+request_expire_2_test() ->
     Port = ?PORT,
     ServerDelay = timer:seconds(1),
     % the thrid request's timeout
@@ -652,6 +684,20 @@ req_sync(N, Timeout, Retry) ->
             req_sync(N - 1, Timeout, Retry);
         {error, Reason} ->
             error({N, Reason})
+    end.
+
+req_async1(Timeout) ->
+    Ref = make_ref(),
+    TestPid = self(),
+    ResultCallback = {fun(Reply) -> TestPid ! {{Ref, reply}, Reply} end, []},
+    Method = get,
+    Request = req(),
+    ok = ehttpc:request_async(
+        ehttpc_pool:pick_worker(?POOL), Method, Request, Timeout, ResultCallback
+    ),
+    receive
+        {{Ref, reply}, Reply} ->
+            {ok, 200, _, _} = Reply
     end.
 
 req_async(N) ->
