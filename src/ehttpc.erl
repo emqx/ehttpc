@@ -144,8 +144,13 @@ request(Pool, Method, Request, Timeout, Retry) when ?IS_POOL(Pool) ->
 request({Pool, N}, Method, Request, Timeout, Retry) when ?IS_POOL(Pool) ->
     request(ehttpc_pool:pick_worker(Pool, N), Method, Request, Timeout, Retry);
 request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
-    ExpireAt = now_() + Timeout,
-    try gen_server:call(Worker, ?REQ(Method, Request, ExpireAt), Timeout + 500) of
+    ExpireAt = fresh_expire_at(Timeout),
+    CallTimeout =
+        case Timeout of
+            infinity -> infinity;
+            T -> T + 500
+        end,
+    try gen_server:call(Worker, ?REQ(Method, Request, ExpireAt), CallTimeout) of
         %% gun will reply {gun_down, _Client, _, normal, _KilledStreams, _} message
         %% when connection closed by keepalive
 
@@ -176,7 +181,7 @@ request(Worker, Method, Request, Timeout, Retry) when is_pid(Worker) ->
 %% @doc Send an async request. The callback is evaluated when an error happens or http response is received.
 -spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
 request_async(Worker, Method, Request, Timeout, ResultCallback) when is_pid(Worker) ->
-    ExpireAt = now_() + Timeout,
+    ExpireAt = fresh_expire_at(Timeout),
     _ = erlang:send(Worker, ?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback)),
     ok.
 
@@ -219,7 +224,7 @@ handle_call({health_check, Timeout}, _From, State = #state{client = ?undef, gun_
         {ok, NewState} ->
             do_after_gun_up(
                 NewState,
-                now_() + Timeout,
+                fresh_expire_at(Timeout),
                 fun(State1) ->
                     {reply, ok, State1}
                 end
@@ -233,7 +238,7 @@ handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_
     ?tp(health_check_when_gun_client_not_ready, #{client => Client}),
     do_after_gun_up(
         State,
-        now_() + Timeout,
+        fresh_expire_at(Timeout),
         fun(State1) ->
             {reply, ok, State1}
         end
@@ -559,6 +564,8 @@ cancel_stream(nofin, Client, StreamRef) ->
     _ = gun:cancel(Client, StreamRef),
     ok.
 
+timeout(infinity = _ExpireAt) ->
+    infinity;
 timeout(ExpireAt) ->
     max(ExpireAt - now_(), 0).
 
@@ -602,6 +609,8 @@ take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
             end
     end.
 
+is_sent_req_expired(?SENT_REQ(_From, infinity = _ExpireAt, _), _Now) ->
+    false;
 is_sent_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) when is_pid(Pid) ->
     %% for gen_server:call, it is aborted after timeout, there is no need to send
     %% reply to the caller
@@ -649,7 +658,7 @@ drop_expired(#{pending_count := 0} = Requests, _Now) ->
 drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
     {PeekFun, OutFun} = peek_oldest_fn(Requests),
     {value, ?PEND_REQ(ReplyTo, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
-    case Now > ExpireAt of
+    case is_integer(ExpireAt) andalso Now > ExpireAt of
         true ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
@@ -857,6 +866,11 @@ enqueue_latest_fn(#{prioritise_latest := true}) ->
     fun queue:in_r/2;
 enqueue_latest_fn(_) ->
     fun queue:in/2.
+
+fresh_expire_at(infinity = _Timeout) ->
+    infinity;
+fresh_expire_at(Timeout) when is_integer(Timeout) ->
+    now_() + Timeout.
 
 -ifdef(TEST).
 
