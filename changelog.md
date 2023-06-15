@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.11
+
+- Added support for `PATCH` method requests.
+
 ## 0.4.10
 
 - Fixed `ehttpc:request` and `ehttpc:request_async` to handle `Timeout = infinity` option.

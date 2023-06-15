@@ -37,7 +37,7 @@ ensure_vsn_bump_test() ->
     V = parse_semver(proplists:get_value(vsn, Props)),
     ?assert(TagV =< V).
 
-ensuer_changelog_test() ->
+ensure_changelog_test() ->
     {ok, [{application, ehttpc, Props}]} = file:consult("src/ehttpc.app.src"),
     Vsn = proplists:get_value(vsn, Props),
     ExpectedChangeLogLine = "## " ++ Vsn,
