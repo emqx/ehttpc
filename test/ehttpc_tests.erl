@@ -768,7 +768,7 @@ no_body_but_headers_indicating_body_test_() ->
                     ),
                     ok = ensure_not_error_response(Response2)
                 end
-             || RequestType <- [put, post]
+             || RequestType <- [put, post, patch]
             ]
         end,
     RequestsWithNoBody =

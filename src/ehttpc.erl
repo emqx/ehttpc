@@ -498,6 +498,10 @@ do_request(Client, get, {Path, Headers}) ->
     RequestRef = gun:get(Client, Path, Headers),
     finish_body_call_if_needed(Client, RequestRef, Headers, <<>>),
     RequestRef;
+do_request(Client, patch, {Path, Headers, Body}) ->
+    RequestRef = gun:patch(Client, Path, Headers, Body),
+    finish_body_call_if_needed(Client, RequestRef, Headers, Body),
+    RequestRef;
 do_request(Client, post, {Path, Headers, Body}) ->
     RequestRef = gun:post(Client, Path, Headers, Body),
     finish_body_call_if_needed(Client, RequestRef, Headers, Body),
