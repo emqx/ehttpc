@@ -44,23 +44,18 @@ t_shutdown() ->
         Worker ! {suspend, timer:seconds(60)},
         %% zombie worker should not block pool stop
         ok = ehttpc_sup:stop_pool(Pool),
-        receive
-            {'DOWN', _, process, SupPid, killed} ->
-                ok;
-            Other2 ->
-                error({"unexpected_message", Other2})
-        after 6000 ->
-            error("failed_to_stop_pool_supervisor")
-        end,
-        receive
-            {'DOWN', _, process, Worker, killed} ->
-                ok;
-            Other ->
-                error({"unexpected_message", Other})
-        after 1000 ->
-            error("failed_to_stop_worker_from_sup_shutdown")
-        end
+        ok = wait_for_down([SupPid, Worker])
     after
         exit(SupPid, kill),
         exit(Worker, kill)
+    end.
+
+wait_for_down([]) ->
+    ok;
+wait_for_down(Pids) ->
+    receive
+        {'DOWN', _, process, Pid, killed} ->
+            wait_for_down(Pids -- [Pid])
+    after 10_000 ->
+        error(timeout)
     end.

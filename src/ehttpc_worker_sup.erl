@@ -27,17 +27,18 @@ start_link(Pool, Opts) ->
 
 init([Pool, Opts]) ->
     WorkerSpec = fun(Id) ->
-                     #{id => {worker, Id},
-                       start => {ehttpc, start_link, [Pool, Id, Opts]},
-                       restart => transient,
-                       shutdown => 5000,
-                       type => worker,
-                       modules => [ehttpc]}
-                 end,
+        #{
+            id => {worker, Id},
+            start => {ehttpc, start_link, [Pool, Id, Opts]},
+            restart => transient,
+            shutdown => 5000,
+            type => worker,
+            modules => [ehttpc]
+        }
+    end,
     Workers = [WorkerSpec(I) || I <- lists:seq(1, pool_size(Opts))],
     {ok, {{one_for_one, 10, 60}, Workers}}.
 
 pool_size(Opts) ->
     Schedulers = erlang:system_info(schedulers),
     proplists:get_value(pool_size, Opts, Schedulers).
-

@@ -21,20 +21,23 @@
 %% API Function Exports
 -export([start_link/2]).
 
--export([ info/1
-        , start_pool/2
-        , stop_pool/1
-        , pick_worker/1
-        , pick_worker/2]).
+-export([
+    info/1,
+    start_pool/2,
+    stop_pool/1,
+    pick_worker/1,
+    pick_worker/2
+]).
 
 %% gen_server Function Exports
--export([ init/1
-        , handle_call/3
-        , handle_cast/2
-        , handle_info/2
-        , terminate/2
-        , code_change/3
-        ]).
+-export([
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
+]).
 
 -import(proplists, [get_value/3]).
 
@@ -44,12 +47,12 @@
 %% API
 %%--------------------------------------------------------------------
 
--spec(start_link(ehttpc:pool_name(), list(ehttpc:option()))
-      -> {ok, pid()} | {error, term()}).
+-spec start_link(ehttpc:pool_name(), list(ehttpc:option())) ->
+    {ok, pid()} | {error, term()}.
 start_link(Pool, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Opts], []).
 
--spec(info(pid()) -> list()).
+-spec info(pid()) -> list().
 info(Pid) ->
     gen_server:call(Pid, info).
 
@@ -76,19 +79,22 @@ init([Pool, Opts]) ->
     PoolType = get_value(pool_type, Opts, random),
     ok = ensure_pool(ehttpc:name(Pool), PoolType, [{size, PoolSize}]),
     ok = lists:foreach(
-           fun(I) ->
-                   ensure_pool_worker(ehttpc:name(Pool), {Pool, I}, I)
-           end, lists:seq(1, PoolSize)),
+        fun(I) ->
+            ensure_pool_worker(ehttpc:name(Pool), {Pool, I}, I)
+        end,
+        lists:seq(1, PoolSize)
+    ),
     {ok, #state{name = Pool, size = PoolSize, type = PoolType}}.
 
 handle_call(info, _From, State = #state{name = Pool, size = Size, type = Type}) ->
     Workers = ehttpc:workers(Pool),
-    Info = [{pool_name, Pool},
-            {pool_size, Size},
-            {pool_type, Type},
-            {workers, Workers}],
+    Info = [
+        {pool_name, Pool},
+        {pool_size, Size},
+        {pool_type, Type},
+        {workers, Workers}
+    ],
     {reply, Info, State};
-
 handle_call(Req, _From, State) ->
     logger:error("[Pool] unexpected request: ~p", [Req]),
     {reply, ignored, State}.
@@ -101,11 +107,7 @@ handle_info(Info, State) ->
     logger:error("[Pool] unexpected info: ~p", [Info]),
     {noreply, State}.
 
-terminate(_Reason, #state{name = Pool, size = Size}) ->
-    lists:foreach(
-      fun(I) ->
-              gproc_pool:remove_worker(ehttpc:name(Pool), {Pool, I})
-      end, lists:seq(1, Size)),
+terminate(_Reason, #state{name = Pool}) ->
     gproc_pool:force_delete(ehttpc:name(Pool)).
 
 code_change(_OldVsn, State, _Extra) ->
@@ -116,13 +118,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 
 ensure_pool(Pool, Type, Opts) ->
-    try gproc_pool:new(Pool, Type, Opts)
+    try
+        gproc_pool:new(Pool, Type, Opts)
     catch
         error:exists -> ok
     end.
 
 ensure_pool_worker(Pool, Name, Slot) ->
-    try gproc_pool:add_worker(Pool, Name, Slot)
+    try
+        gproc_pool:add_worker(Pool, Name, Slot)
     catch
         error:exists -> ok
     end.

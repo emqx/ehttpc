@@ -1,5 +1,13 @@
 # ehttpc changes
 
+## 0.4.12
+
+- Upgrade to gun 1.3.10 (OTP 26)
+- Changed from `gun:open` to `gun:start_link` to start the gun process.
+  This makes the gun process linked to `ehttpc` process (instead of `gun_sup`).
+  Prior to this change, some early errors causing gun process to crash might not be able to be caught by ehttpc due to the slow monitoring.
+  e.g. when some SSL option is invalid, the gun process will crash immediately and `ehttpc` can only get a `noproc` error reason from the delayed process monitor.
+
 ## 0.4.11
 
 - Added support for `PATCH` method requests.

@@ -83,6 +83,7 @@
     pool :: term(),
     id :: pos_integer(),
     client :: pid() | ?undef,
+    %% no longer in use since 0.4.12 (changed to gun:start_link)
     mref :: reference() | ?undef,
     host :: inet:hostname() | inet:ip_address(),
     port :: inet:port_number(),
@@ -312,6 +313,9 @@ do_handle_info(
     {'DOWN', MRef, process, Client, Reason},
     State = #state{mref = MRef, client = Client}
 ) ->
+    %% stale code for appup since 0.4.12
+    handle_client_down(State, Reason);
+do_handle_info({'EXIT', Client, Reason}, State = #state{client = Client}) ->
     handle_client_down(State, Reason);
 do_handle_info(Info, State) ->
     ?LOG(warning, "~p unexpected_info: ~p, client: ~p", [?MODULE, Info, State#state.client]),
@@ -447,10 +451,9 @@ handle_gun_down(#state{requests = Requests} = State, KilledStreams, Reason) ->
     State#state{requests = NRequests, gun_state = down}.
 
 open(State = #state{host = Host, port = Port, gun_opts = GunOpts}) ->
-    case gun:open(Host, Port, GunOpts) of
+    case gun:start_link(self(), Host, Port, GunOpts) of
         {ok, ConnPid} when is_pid(ConnPid) ->
-            MRef = erlang:monitor(process, ConnPid),
-            {ok, State#state{mref = MRef, client = ConnPid}};
+            {ok, State#state{client = ConnPid}};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -704,7 +707,7 @@ maybe_shoot(#state{enable_pipelining = EP, requests = Requests0, client = Client
     case ClientDown orelse should_cool_down(EP, maps:size(Sent)) of
         true ->
             %% Then we should cool down, and let the gun responses
-            %% or 'DOWN' message to trigger the flow again
+            %% or 'EXIT' message to trigger the flow again
             ?tp(cool_down, #{enable_pipelining => EP}),
             State;
         false ->
@@ -779,7 +782,13 @@ do_after_gun_up(State0 = #state{client = Client, mref = MRef}, ExpireAt, Fun) ->
             %% but the connection is likely to be useful
             {reply, {error, connect_timeout}, State};
         {error, Reason} ->
-            erlang:demonitor(MRef, [flush]),
+            case is_reference(MRef) of
+                true ->
+                    %% stale code for appup since 0.4.12
+                    erlang:demonitor(MRef, [flush]);
+                false ->
+                    ok
+            end,
             {reply, {error, Reason}, State#state{client = ?undef, mref = ?undef}}
     end.
 
@@ -791,8 +800,14 @@ gun_await_up(Pid, ExpireAt, Timeout, MRef, State0) ->
         {gun_up, Pid, Protocol} ->
             {{ok, Protocol}, State0};
         {'DOWN', MRef, process, Pid, {shutdown, Reason}} ->
+            %% stale code for appup since 0.4.12
             {{error, Reason}, State0};
         {'DOWN', MRef, process, Pid, Reason} ->
+            %% stale code for appup since 0.4.12
+            {{error, Reason}, State0};
+        {'EXIT', Pid, {shutdown, Reason}} ->
+            {{error, Reason}, State0};
+        {'EXIT', Pid, Reason} ->
             {{error, Reason}, State0};
         ?ASYNC_REQ(Method, Request, ExpireAt1, ResultCallback) ->
             Req = ?REQ(Method, Request, ExpireAt1),

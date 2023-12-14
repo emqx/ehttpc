@@ -21,9 +21,10 @@
 -export([start_link/0]).
 
 %% API
--export([ start_pool/2
-        , stop_pool/1
-        ]).
+-export([
+    start_pool/2,
+    stop_pool/1
+]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -46,26 +47,28 @@ start_pool(Pool, Opts) ->
 -spec stop_pool(Pool :: ehttpc:pool_name()) -> ok | {error, term()}.
 stop_pool(Pool) ->
     ChildId = child_id(Pool),
-	case supervisor:terminate_child(?MODULE, ChildId) of
+    case supervisor:terminate_child(?MODULE, ChildId) of
         ok ->
             supervisor:delete_child(?MODULE, ChildId);
         {error, not_found} ->
             ok
-	end.
+    end.
 
 %%--------------------------------------------------------------------
 %% Supervisor callbacks
 %%--------------------------------------------------------------------
 
 init([]) ->
-    {ok, { {one_for_one, 10, 100}, []} }.
+    {ok, {{one_for_one, 10, 100}, []}}.
 
 pool_spec(Pool, Opts) ->
-    #{id => child_id(Pool),
-      start => {ehttpc_pool_sup, start_link, [Pool, Opts]},
-      restart => transient,
-      shutdown => 5000,
-      type => supervisor,
-      modules => [ehttpc_pool_sup]}.
+    #{
+        id => child_id(Pool),
+        start => {ehttpc_pool_sup, start_link, [Pool, Opts]},
+        restart => transient,
+        shutdown => 5000,
+        type => supervisor,
+        modules => [ehttpc_pool_sup]
+    }.
 
 child_id(Pool) -> {ehttpc_pool_sup, Pool}.
