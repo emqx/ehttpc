@@ -28,16 +28,22 @@ start_link(Pool, Opts) ->
     supervisor:start_link(?MODULE, [Pool, Opts]).
 
 init([Pool, Opts]) ->
-    Specs = [#{id => pool,
-               start => {ehttpc_pool, start_link, [Pool, Opts]},
-               restart => transient,
-               shutdown => 5000,
-               type => worker,
-               modules => [ehttpc_pool]},
-             #{id => worker_sup,
-               start => {ehttpc_worker_sup, start_link, [Pool, Opts]},
-               restart => transient,
-               shutdown => 5000,
-               type => supervisor,
-               modules => [ehttpc_worker_sup]}],
+    Specs = [
+        #{
+            id => pool,
+            start => {ehttpc_pool, start_link, [Pool, Opts]},
+            restart => transient,
+            shutdown => 5000,
+            type => worker,
+            modules => [ehttpc_pool]
+        },
+        #{
+            id => worker_sup,
+            start => {ehttpc_worker_sup, start_link, [Pool, Opts]},
+            restart => transient,
+            shutdown => 5000,
+            type => supervisor,
+            modules => [ehttpc_worker_sup]
+        }
+    ],
     {ok, {{one_for_all, 10, 100}, Specs}}.
