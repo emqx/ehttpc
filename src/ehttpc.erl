@@ -451,7 +451,7 @@ handle_gun_down(#state{requests = Requests} = State, KilledStreams, Reason) ->
     State#state{requests = NRequests, gun_state = down}.
 
 open(State = #state{host = Host, port = Port, gun_opts = GunOpts}) ->
-    case gun:start_link(self(), Host, Port, GunOpts) of
+    case gun:start_link(Host, Port, GunOpts) of
         {ok, ConnPid} when is_pid(ConnPid) ->
             {ok, State#state{client = ConnPid}};
         {error, Reason} ->
