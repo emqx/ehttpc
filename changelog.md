@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.4.13
+
+- Upgrade to gun 1.3.11.
+  [Fix `host` header](https://github.com/emqx/gun/pull/8)
+
 ## 0.4.12
 
 - Upgrade to gun 1.3.10 (OTP 26)
