@@ -1,6 +1,9 @@
 %% -*- mode: erlang -*-
-{"0.4.13",
+{"0.4.14",
    [
+     {"0.4.13", [
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
+     ]},
      {"0.4.12", [ % upgrade gun, no local beam changes in this version
      ]},
      {"0.4.11", [
@@ -75,6 +78,9 @@
      ]}
    ],
    [
+     {"0.4.13", [
+       {load_module, ehttpc_pool, brutal_purge, soft_purge, []}
+     ]},
      {"0.4.12", [ % upgrade gun, no local beam changes in this version
      ]},
      {"0.4.11", [

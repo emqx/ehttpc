@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.14
+
+- Forcefully recreate `gproc_pool`s during `ehttpc_pool:init/1` to prevent reusing pools in an inconsistent state.
+
 ## 0.4.13
 
 - Upgrade to gun 1.3.11.
