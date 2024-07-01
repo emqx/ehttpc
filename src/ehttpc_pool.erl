@@ -77,10 +77,10 @@ init([Pool, Opts]) ->
     Schedulers = erlang:system_info(schedulers),
     PoolSize = get_value(pool_size, Opts, Schedulers),
     PoolType = get_value(pool_type, Opts, random),
-    ok = ensure_pool(ehttpc:name(Pool), PoolType, [{size, PoolSize}]),
+    ok = ensure_pool(Pool, PoolType, [{size, PoolSize}]),
     ok = lists:foreach(
         fun(I) ->
-            ensure_pool_worker(ehttpc:name(Pool), {Pool, I}, I)
+            add_pool_worker(Pool, {Pool, I}, I)
         end,
         lists:seq(1, PoolSize)
     ),
@@ -108,7 +108,7 @@ handle_info(Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{name = Pool}) ->
-    gproc_pool:force_delete(ehttpc:name(Pool)).
+    delete_pool(Pool).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -119,14 +119,18 @@ code_change(_OldVsn, State, _Extra) ->
 
 ensure_pool(Pool, Type, Opts) ->
     try
-        gproc_pool:new(Pool, Type, Opts)
+        create_pool(Pool, Type, Opts)
     catch
-        error:exists -> ok
+        error:exists ->
+            delete_pool(Pool),
+            create_pool(Pool, Type, Opts)
     end.
 
-ensure_pool_worker(Pool, Name, Slot) ->
-    try
-        gproc_pool:add_worker(Pool, Name, Slot)
-    catch
-        error:exists -> ok
-    end.
+add_pool_worker(Pool, Name, Slot) ->
+    gproc_pool:add_worker(ehttpc:name(Pool), Name, Slot).
+
+create_pool(Pool, Type, Opts) ->
+    gproc_pool:new(ehttpc:name(Pool), Type, Opts).
+
+delete_pool(Pool) ->
+    gproc_pool:force_delete(ehttpc:name(Pool)).
