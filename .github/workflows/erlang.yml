@@ -29,6 +29,8 @@ jobs:
       with:
         otp-version: ${{ matrix.otp }}
         rebar3-version: 3
+    - name: Ensure style
+      run: ./check-style.sh
     - name: setup tinyproxy
       run: sudo ./test/scripts/setup_tinyproxy.sh
     - name: Compile
@@ -39,5 +41,3 @@ jobs:
       run: make dialyzer
     - name: Ensure version consistency
       run: ./check_vsns.escript
-    - name: Ensure style
-      run: ./check-style.sh
