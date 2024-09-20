@@ -45,6 +45,53 @@ concurrent_callers_test_() ->
         {timeout, TestTimeout, fun() -> with_pool(Opts4, F) end}
     ].
 
+proxy_test_() ->
+    N = 50,
+    TestTimeout = 1000,
+    Host = ?HOST,
+    Port = ?PORT,
+    ProxyOpts0 = #{host => "127.0.0.1", port => 8888},
+    ProxyOpts1 = ProxyOpts0#{username => "user", password => "pass"},
+    %%                host  port  enable_pipelining prioritise_latest
+    Opts1_ = pool_opts(Host, Port, true, true),
+    Opts2_ = pool_opts(Host, Port, true, false),
+    Opts3_ = pool_opts(Host, Port, false, true),
+    Opts4_ = pool_opts(Host, Port, false, false),
+    [Opts1, Opts2, Opts3, Opts4] = [
+        [{proxy, ProxyOpts0} | O]
+     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
+    ],
+    [Opts5, Opts6, Opts7, Opts8] = [
+        [{proxy, ProxyOpts1} | O]
+     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
+    ],
+    F = fun() -> req_async(?METHOD, N) end,
+    NoAuthConfPath = filename:absname("test/scripts/tinyproxy.conf"),
+    BasicAuthConfPath = filename:absname("test/scripts/tinyproxy_with_auth.conf"),
+    {inorder, [
+        {setup, fun() -> setup_proxy(NoAuthConfPath) end, fun stop_proxy/1, [
+            {timeout, TestTimeout, ?_test(with_pool(Opts1, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts2, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts3, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts4, F))}
+        ]},
+        {setup, fun() -> setup_proxy(BasicAuthConfPath) end, fun stop_proxy/1, [
+            {"missing auth",
+                ?_test(
+                    with_pool(Opts1, fun() ->
+                        ?assertMatch(
+                            {error, {proxy_error, unauthorized}},
+                            do_req_sync(get, 1_000)
+                        )
+                    end)
+                )},
+            {timeout, TestTimeout, ?_test(with_pool(Opts5, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts6, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts7, F))},
+            {timeout, TestTimeout, ?_test(with_pool(Opts8, F))}
+        ]}
+    ]}.
+
 req(get) ->
     {?PATH, [{<<"Connection">>, <<"Keep-Alive">>}]};
 req(post) ->
@@ -54,11 +101,14 @@ req(post) ->
 req_sync(_Method, 0, _Timeout) ->
     ok;
 req_sync(Method, N, Timeout) ->
-    case ehttpc:request(?POOL, Method, req(Method), Timeout, _Retry = 0) of
+    case do_req_sync(Method, Timeout) of
         {ok, _, _Headers, _Body} -> ok;
         {error, timeout} -> timeout
     end,
     req_sync(Method, N - 1, Timeout).
+
+do_req_sync(Method, Timeout) ->
+    ehttpc:request(?POOL, Method, req(Method), Timeout, _Retry = 0).
 
 req_async(Method, N) ->
     {Time, Results} = timer:tc(fun() -> req_async(Method, N, 5_000) end),
@@ -97,3 +147,15 @@ with_pool(Opts, F) ->
     after
         ehttpc_sup:stop_pool(?POOL)
     end.
+
+setup_proxy(ConfPath) ->
+    ?debugFmt("conf path: ~s", [ConfPath]),
+    Output = os:cmd("tinyproxy -c" ++ ConfPath),
+    ?debugFmt("setup proxy output:\n\n~s\n", [Output]),
+    ok.
+
+stop_proxy(_) ->
+    Output = os:cmd("pkill tinyproxy"),
+    ?debugFmt("kill proxy output:\n\n~s\n", [Output]),
+    timer:sleep(500),
+    ok.

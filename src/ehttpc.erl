@@ -900,12 +900,16 @@ gun_await_connect_proxy(Pid, StreamRef, ExpireAt, Timeout, Protocol, ProxyOpts, 
             State = enqueue_req(ResultCallback, Req, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
-            gun_await_connect_proxy(Pid, StreamRef, ExpireAt, NewTimeout, Protocol, ProxyOpts, State);
+            gun_await_connect_proxy(
+                Pid, StreamRef, ExpireAt, NewTimeout, Protocol, ProxyOpts, State
+            );
         ?GEN_CALL_REQ(From, Call) ->
             State = enqueue_req(From, Call, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
-            gun_await_connect_proxy(Pid, StreamRef, ExpireAt, NewTimeout, Protocol, ProxyOpts, State)
+            gun_await_connect_proxy(
+                Pid, StreamRef, ExpireAt, NewTimeout, Protocol, ProxyOpts, State
+            )
     after Timeout ->
         {{error, connect_timeout}, State0}
     end.
