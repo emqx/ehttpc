@@ -434,22 +434,23 @@ upgrade_state_on_the_fly_test() ->
             spawn_link(fun() -> ehttpc:request(?POOL, post, {<<"/">>, [], <<"test-post">>}) end),
             {ok, _} = ?block_until(#{?snk_kind := shot}, 2000, infinity),
             Pid = ehttpc_pool:pick_worker(?POOL),
-            GetState = fun() -> lists:reverse(tuple_to_list(sys:get_state(Pid))) end,
+            GetState = fun() -> sys:get_state(Pid) end,
             State = GetState(),
-            Requests = hd(State),
+            RequestsIdx = 11,
+            Requests = element(RequestsIdx, State),
             #{sent := Sent} = Requests,
             ?assertEqual(1, maps:size(Sent)),
-            OldState = list_to_tuple(lists:reverse([Sent | tl(State)])),
+            OldState = setelement(RequestsIdx, State, Sent),
             %% put old format to the process state
             sys:replace_state(Pid, fun(_) -> OldState end),
             %% verify it's in the old format
-            ?assertEqual(Sent, hd(GetState())),
+            ?assertEqual(Sent, element(RequestsIdx, GetState())),
             %% send a message to trigger upgrade
             Pid ! dummy,
             {error, _} = gen_server:call(Pid, dummy),
             ok = gen_server:cast(Pid, dummy),
             %% now it should be upgraded to the new version
-            ?assertMatch(#{sent := Sent}, hd(GetState())),
+            ?assertMatch(#{sent := Sent}, element(RequestsIdx, GetState())),
             _ = sys:get_status(Pid),
             ok
         end

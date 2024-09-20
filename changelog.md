@@ -1,5 +1,22 @@
 # ehttpc changes
 
+## 0.4.15
+
+- Added support for using HTTP proxy (HTTP 1.1 only).
+  To use it, pass `proxy` in the pool opts.
+
+  Ex:
+
+  ```erlang
+  %% Point to the proxy host and port
+  ProxyOpts = #{host => "127.0.0.1", port => 8888}.
+  ehttpc_sup:start_pool(<<"pool">>, [{host, "target.host.com"}, {port, 80}, {proxy, ProxyOpts}]).
+
+  %% To use username and password
+  ProxyOpts = #{host => "127.0.0.1", port => 8888, username => "proxyuser", password => "secret"}.
+  ehttpc_sup:start_pool(<<"pool">>, [{host, "target.host.com"}, {port, 80}, {proxy, ProxyOpts}]).
+  ```
+
 ## 0.4.14
 
 - Forcefully recreate `gproc_pool`s during `ehttpc_pool:init/1` to prevent reusing pools in an inconsistent state.
