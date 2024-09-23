@@ -1,7 +1,8 @@
 # ehttpc changes
 
-## 0.4.15
+## 0.5.0
 
+- Dropped hot-upgrade support.
 - Added support for using HTTP proxy (HTTP 1.1 only).
   To use it, pass `proxy` in the pool opts.
 

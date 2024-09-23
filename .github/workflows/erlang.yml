@@ -39,5 +39,3 @@ jobs:
       run: make eunit
     - name: Run dialyzer
       run: make dialyzer
-    - name: Ensure version consistency
-      run: ./check_vsns.escript

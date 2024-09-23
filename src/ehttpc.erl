@@ -37,7 +37,6 @@
     handle_cast/2,
     handle_info/2,
     terminate/2,
-    code_change/3,
     format_status/1,
     format_status/2,
     format_state/2
@@ -328,118 +327,6 @@ terminate(_Reason, #state{pool = Pool, id = Id, client = Client}) ->
     is_pid(Client) andalso gun:close(Client),
     gproc_pool:disconnect_worker(ehttpc:name(Pool), {Pool, Id}),
     ok.
-
-%% NOTE: the git tag 0.1.0 was re-tagged
-%% the actual version in use in EMQX 4.2 had requests missing
-code_change({down, _Vsn}, State, [no_requests]) ->
-    %% downgrage to a version before 'requests' and 'enable_pipelining' were added
-    #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        gun_opts = GunOpts,
-        gun_state = GunState
-    } = State,
-    {ok, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState}};
-code_change({down, _Vsn}, State, [no_enable_pipelining]) ->
-    %% downgrade to a version before 'enable_pipelining' was added
-    #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = Requests
-    } = State,
-    OldRequests = downgrade_requests(Requests),
-    {ok, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, OldRequests}};
-code_change({down, _Vsn}, State, [downgrade_requests]) ->
-    %% downgrade to a version which had old format 'requests'
-    #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        enable_pipelining = Pipelining,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = Requests
-    } = State,
-    OldRequests = downgrade_requests(Requests),
-    {ok, {state, Pool, ID, Client, MRef, Host, Port, Pipelining, GunOpts, GunState, OldRequests}};
-code_change({down, _Vsn}, State, [no_proxy]) ->
-    %% downgrade to a version before `proxy' was added
-    #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        enable_pipelining = Pipelining,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = Requests
-    } = State,
-    {ok, {state, Pool, ID, Client, MRef, Host, Port, Pipelining, GunOpts, GunState, Requests}};
-%% below are upgrade instructions
-code_change(_Vsn, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState}, _Extra) ->
-    %% upgrade from a version before 'requests' field was added
-    {ok, #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        enable_pipelining = true,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = upgrade_requests(#{}),
-        proxy = undefined
-    }};
-code_change(_Vsn, {state, Pool, ID, Client, MRef, Host, Port, GunOpts, GunState, Requests}, _) ->
-    %% upgrade from a version before 'enable_pipelining' field was added
-    {ok, #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        enable_pipelining = true,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = upgrade_requests(Requests)
-    }};
-code_change(
-    _Vsn, {state, Pool, ID, Client, MRef, Host, Port, Pipelining, GunOpts, GunState, Requests}, _
-) ->
-    %% upgrade from a version before `proxy' field was added
-    {ok, #state{
-        pool = Pool,
-        id = ID,
-        client = Client,
-        mref = MRef,
-        host = Host,
-        port = Port,
-        enable_pipelining = Pipelining,
-        gun_opts = GunOpts,
-        gun_state = GunState,
-        requests = upgrade_requests(Requests),
-        proxy = undefined
-    }};
-code_change(_Vsn, State, _) ->
-    %% upgrade from a version having old format 'requests' field
-    {ok, upgrade_requests(State)}.
 
 format_status(Status = #{state := State}) ->
     Status#{state => format_state(State, minimal)}.
