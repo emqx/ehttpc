@@ -1,5 +1,12 @@
 # ehttpc changes
 
+## 0.6.0
+
+- Add `max_inactive` duration option (default is `10_000`).
+  This is to detect zombie connections especially when pipelining is set > 1.
+  With `{max_inactive, 10_000}` added to the `start_pool` option,
+  it will try to reconnect HTTP server up on detection of the last sent request had been expired for 10 seconds.
+
 ## 0.5.0
 
 - Dropped hot-upgrade support.
