@@ -46,9 +46,7 @@
 %% for test
 -export([
     get_state/1,
-    get_state/2,
-    upgrade_requests/1,
-    downgrade_requests/1
+    get_state/2
 ]).
 
 -export_type([
@@ -253,20 +251,20 @@ handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_
         end
     );
 handle_call(?REQ(_Method, _Request, _ExpireAt) = Req, From, State0) ->
-    State1 = enqueue_req(From, Req, upgrade_requests(State0)),
+    State1 = enqueue_req(From, Req, State0),
     State = maybe_shoot(State1),
     {noreply, State};
 handle_call(Call, _From, State0) ->
-    State = maybe_shoot(upgrade_requests(State0)),
+    State = maybe_shoot(State0),
     {reply, {error, {unexpected_call, Call}}, State}.
 
 handle_cast(_Msg, State0) ->
-    State = maybe_shoot(upgrade_requests(State0)),
+    State = maybe_shoot(State0),
     {noreply, State}.
 
 handle_info(?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback), State0) ->
     Req = ?REQ(Method, Request, ExpireAt),
-    State1 = enqueue_req(ResultCallback, Req, upgrade_requests(State0)),
+    State1 = enqueue_req(ResultCallback, Req, State0),
     State = maybe_shoot(State1),
     {noreply, State};
 handle_info({suspend, Time}, State) ->
@@ -277,7 +275,7 @@ handle_info(check_inactive, State0) ->
     State = maybe_shoot(State0),
     {noreply, start_check_inactive_timer(State)};
 handle_info(Info, State0) ->
-    State1 = do_handle_info(Info, upgrade_requests(State0)),
+    State1 = do_handle_info(Info, State0),
     State = maybe_shoot(State1),
     {noreply, State}.
 
@@ -537,24 +535,6 @@ now_() ->
 %% =================================================================================
 %% sent requests
 %% =================================================================================
-
-%% downgrade will cause all the pending calls to timeout
-downgrade_requests(#{pending := _PendingCalls, sent := Sent}) -> Sent;
-downgrade_requests(Already) -> Already.
-
-%% upgrade from old format before 0.1.16
-upgrade_requests(#state{requests = Requests} = State) ->
-    State#state{requests = upgrade_requests(Requests)};
-upgrade_requests(#{pending := _, sent := _} = Already) ->
-    Already;
-upgrade_requests(Map) when is_map(Map) ->
-    #{
-        pending => queue:new(),
-        pending_count => 0,
-        sent => Map,
-        prioritise_latest => false,
-        max_sent_expire => 0
-    }.
 
 put_sent_req(
     StreamRef,
