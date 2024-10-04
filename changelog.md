@@ -2,6 +2,7 @@
 
 ## 0.6.0
 
+- Changed log format to be more structured, `host` and `port` are included in the log data fields.
 - Add `max_inactive` duration option (default is `10_000`).
   This is to detect zombie connections especially when pipelining is set > 1.
   With `{max_inactive, 10_000}` added to the `start_pool` option,
