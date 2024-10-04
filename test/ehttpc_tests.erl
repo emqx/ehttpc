@@ -335,7 +335,7 @@ health_check_abnormal_test_() ->
                         name => ?FUNCTION_NAME,
                         delay => 0
                     },
-                    pool_opts(Unreachable, Port, true),
+                    [{connect_timeout, 100} | pool_opts(Unreachable, Port, true)],
                     begin
                         Worker = ehttpc_pool:pick_worker(?POOL),
                         ?assertEqual(
@@ -466,7 +466,7 @@ cool_down_after_5_reqs_test() ->
         oneoff => false
     },
     PoolOpts = pool_opts("127.0.0.1", Port, _Pipelining = 5, _PrioritiseLatest = false),
-    Reqs = [{"/", [], iolist_to_binary(["test-put-", integer_to_list(I)])} || I <- lists:seq(1, 6)],
+    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, 6)],
     ?WITH(
         ServerOpts,
         PoolOpts,
@@ -483,6 +483,90 @@ cool_down_after_5_reqs_test() ->
             #{sent := Sent, pending_count := PendingCount} = Requests,
             ?assertEqual(5, maps:size(Sent)),
             ?assertEqual(1, PendingCount),
+            ok
+        end
+    ).
+
+zombie_detect_inflight_not_full_test() ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => ?FUNCTION_NAME,
+        %% no response during this test
+        delay => 30_000,
+        oneoff => false
+    },
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1_000} | PoolOpts0],
+    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, Pipelining - 1)],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            lists:foreach(
+                fun(Req) ->
+                    spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], Req}, 100) end)
+                end,
+                Reqs
+            ),
+            Pid = ehttpc_pool:pick_worker(?POOL),
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 2500, infinity),
+            %% let the EXIT signal get to ehttpc process
+            {ok, _} = ?block_until(#{?snk_kind := handle_client_down}, 1000, infinity),
+            #{requests := Requests} = ehttpc:get_state(Pid, normal),
+            #{sent := Sent, pending_count := PendingCount, max_sent_expire := MaxTs} = Requests,
+            ?assertEqual(0, maps:size(Sent)),
+            ?assertEqual(0, PendingCount),
+            ?assertEqual(0, MaxTs),
+            ok
+        end
+    ).
+
+zombie_detect_inflight_full_test() ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => ?FUNCTION_NAME,
+        %% no response during this test
+        delay => 30_000,
+        oneoff => false
+    },
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1_000} | PoolOpts0],
+    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, Pipelining)],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            %% fill up the inflight window
+            lists:foreach(
+                fun(Req) ->
+                    spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], Req}, 100) end)
+                end,
+                Reqs
+            ),
+            Pid = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            Callback = {fun(Reason) -> Tester ! {reason, Reason} end, []},
+            %% the next request should be in the pending
+            ehttpc:request_async(Pid, put, {<<"/">>, [], "foo"}, 100, Callback),
+            %% wait for reconnect
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 2_500, infinity),
+            %% now the pending request is processed, but should eventually timeout again
+            %% detected by zomebie check timer
+            receive
+                {reason, Reason} ->
+                    ?assertEqual({error, killed}, Reason)
+            after 2_500 ->
+                error(timeout)
+            end,
+            #{requests := Requests} = ehttpc:get_state(Pid, normal),
+            #{sent := Sent, pending_count := PendingCount, max_sent_expire := MaxTs} = Requests,
+            ?assertEqual(0, maps:size(Sent)),
+            ?assertEqual(0, PendingCount),
+            ?assertEqual(0, MaxTs),
             ok
         end
     ).
