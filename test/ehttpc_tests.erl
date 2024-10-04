@@ -496,9 +496,10 @@ zombie_detect_inflight_not_full_test() ->
         delay => 30_000,
         oneoff => false
     },
-    PoolOpts0 = pool_opts("127.0.0.1", Port, _Pipelining = 5, _PrioritiseLatest = false),
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
     PoolOpts = [{max_inactive, 1_000} | PoolOpts0],
-    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, 4)],
+    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, Pipelining - 1)],
     ?WITH(
         ServerOpts,
         PoolOpts,
@@ -512,7 +513,7 @@ zombie_detect_inflight_not_full_test() ->
             Pid = ehttpc_pool:pick_worker(?POOL),
             {ok, _} = ?block_until(#{?snk_kind := reconnect}, 2500, infinity),
             %% let the EXIT signal get to ehttpc process
-            timer:sleep(100),
+            {ok, _} = ?block_until(#{?snk_kind := handle_client_down}, 1000, infinity),
             #{requests := Requests} = ehttpc:get_state(Pid, normal),
             #{sent := Sent, pending_count := PendingCount, max_sent_expire := MaxTs} = Requests,
             ?assertEqual(0, maps:size(Sent)),
@@ -531,9 +532,10 @@ zombie_detect_inflight_full_test() ->
         delay => 30_000,
         oneoff => false
     },
-    PoolOpts0 = pool_opts("127.0.0.1", Port, _Pipelining = 5, _PrioritiseLatest = false),
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
     PoolOpts = [{max_inactive, 1_000} | PoolOpts0],
-    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, 5)],
+    Reqs = [["test-put-", integer_to_list(I)] || I <- lists:seq(1, Pipelining)],
     ?WITH(
         ServerOpts,
         PoolOpts,

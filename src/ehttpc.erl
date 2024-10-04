@@ -567,7 +567,7 @@ put_sent_req(
     ?SENT_REQ(_, Expire, _) = Req,
     Requests#{
         sent := maps:put(StreamRef, Req, Sent),
-        max_sent_expire => max_expire(T, Expire)
+        max_sent_expire := max_expire(T, Expire)
     }.
 
 %% if a request has infinity timeout, ignore it
@@ -696,6 +696,8 @@ maybe_shoot(
             ?tp(cool_down, #{enable_pipelining => State#state.enable_pipelining}),
             State;
         reconnect ->
+            %% assert
+            true = (MaxExpire > 0),
             %% the connection has been inactive for too long
             log(
                 error,
@@ -718,7 +720,7 @@ maybe_shoot(
 check_gun(ClientPid, PipelineLimit, SentCount, MaxExpireTs, MaxInactiveDuration) ->
     maybe
         ok ?= check_gun_pid(ClientPid),
-        ok ?= check_gun_jamed(SentCount, MaxExpireTs, MaxInactiveDuration),
+        ok ?= check_gun_jammed(SentCount, MaxExpireTs, MaxInactiveDuration),
         check_gun_limit(PipelineLimit, SentCount)
     end.
 
@@ -739,10 +741,10 @@ check_gun_pid(Pid) ->
 
 %% if there are sent requests, and the last reply is older than max_inactive,
 %% the connection is considered in zomebie state hence require a reconnect.
-check_gun_jamed(_SentCount, 0, _MaxInactiveDuration) ->
+check_gun_jammed(_SentCount, 0, _MaxInactiveDuration) ->
     %% there was no expire time recorded before
     ok;
-check_gun_jamed(_SentCount, MaxExpireTs, MaxInactiveDuration) ->
+check_gun_jammed(_SentCount, MaxExpireTs, MaxInactiveDuration) ->
     case (now_() - MaxExpireTs) > MaxInactiveDuration of
         true ->
             reconnect;
