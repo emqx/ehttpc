@@ -416,46 +416,6 @@ server_outage_test_() ->
         end}
     ].
 
-%% c:l(ehttpc) should work for version 0.1.8 -> 0.1.15
-upgrade_state_on_the_fly_test() ->
-    Port = ?PORT,
-    ServerOpts = #{
-        port => Port,
-        name => ?FUNCTION_NAME,
-        %% no response during this test
-        delay => 300_000,
-        oneoff => false
-    },
-    PoolOpts = pool_opts("127.0.0.1", Port, _Pipelining = true, _PrioritiseLatest = false),
-    ?WITH(
-        ServerOpts,
-        PoolOpts,
-        begin
-            spawn_link(fun() -> ehttpc:request(?POOL, post, {<<"/">>, [], <<"test-post">>}) end),
-            {ok, _} = ?block_until(#{?snk_kind := shot}, 2000, infinity),
-            Pid = ehttpc_pool:pick_worker(?POOL),
-            GetState = fun() -> sys:get_state(Pid) end,
-            State = GetState(),
-            RequestsIdx = 11,
-            Requests = element(RequestsIdx, State),
-            #{sent := Sent} = Requests,
-            ?assertEqual(1, maps:size(Sent)),
-            OldState = setelement(RequestsIdx, State, Sent),
-            %% put old format to the process state
-            sys:replace_state(Pid, fun(_) -> OldState end),
-            %% verify it's in the old format
-            ?assertEqual(Sent, element(RequestsIdx, GetState())),
-            %% send a message to trigger upgrade
-            Pid ! dummy,
-            {error, _} = gen_server:call(Pid, dummy),
-            ok = gen_server:cast(Pid, dummy),
-            %% now it should be upgraded to the new version
-            ?assertMatch(#{sent := Sent}, element(RequestsIdx, GetState())),
-            _ = sys:get_status(Pid),
-            ok
-        end
-    ).
-
 cool_down_after_5_reqs_test() ->
     Port = ?PORT,
     ServerOpts = #{
