@@ -38,10 +38,15 @@
     handle_cast/2,
     handle_info/2,
     terminate/2,
-    format_status/1,
-    format_status/2,
-    format_state/2
+    format_status/1
 ]).
+
+-if(?OTP_RELEASE < 25).
+-export([format_status/2]).
+-endif.
+
+%% introspection
+-export([format_state/2]).
 
 %% for test
 -export([
@@ -343,8 +348,10 @@ format_status(Status = #{state := State}) ->
 %% TODO
 %% This is deprecated since OTP-25 in favor of `format_status/1`. Remove once
 %% OTP-25 becomes minimum supported OTP version.
+-if(?OTP_RELEASE < 25).
 format_status(_Opt, [_PDict, State]) ->
     format_state(State, minimal).
+-endif.
 
 %%--------------------------------------------------------------------
 %% Internal functions
