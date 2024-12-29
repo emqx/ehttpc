@@ -52,18 +52,11 @@ proxy_test_() ->
     Port = ?PORT,
     ProxyOpts0 = #{host => "127.0.0.1", port => 8888},
     ProxyOpts1 = ProxyOpts0#{username => "user", password => "pass"},
-    %%                host  port  enable_pipelining prioritise_latest
-    Opts1_ = pool_opts(Host, Port, true, true),
-    Opts2_ = pool_opts(Host, Port, true, false),
-    Opts3_ = pool_opts(Host, Port, false, true),
-    Opts4_ = pool_opts(Host, Port, false, false),
-    [Opts1, Opts2, Opts3, Opts4] = [
-        [{proxy, ProxyOpts0} | O]
-     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
-    ],
-    [Opts5, Opts6, Opts7, Opts8] = [
-        [{proxy, ProxyOpts1} | O]
-     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
+    [Opts1, Opts2, Opts3, Opts4, Opts5, Opts6, Opts7, Opts8] = [
+        [{proxy, ProxyOpts} | pool_opts(Host, Port, Pipeline, PrioLatest)]
+     || ProxyOpts <- [ProxyOpts0, ProxyOpts1],
+        Pipeline <- [true, false],
+        PrioLatest <- [true, false]
     ],
     F = fun() -> req_async(?METHOD, N) end,
     NoAuthConfPath = filename:absname("test/scripts/tinyproxy.conf"),
