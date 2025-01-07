@@ -469,9 +469,11 @@ gun_opts([{transport, Transport} | Opts0], Acc0) ->
     Acc1 = Acc0#{transport => Transport},
     case lists:keytake(transport_opts, 1, Opts0) of
         {value, {_, TransportOpts}, Opts} when Transport == tcp ->
-            Acc = Acc1#{tcp_opts => TransportOpts};
+            {TCPOpts, _} = split_transport_opts(TransportOpts),
+            Acc = Acc1#{tcp_opts => TCPOpts};
         {value, {_, TransportOpts}, Opts} when Transport == tls; Transport == ssl ->
-            Acc = Acc1#{tls_opts => TransportOpts};
+            {TCPOpts, TLSOpts} = split_transport_opts(TransportOpts),
+            Acc = Acc1#{tcp_opts => TCPOpts, tls_opts => TLSOpts};
         false ->
             Acc = Acc0,
             Opts = Opts0
@@ -480,6 +482,61 @@ gun_opts([{transport, Transport} | Opts0], Acc0) ->
 gun_opts([_ | Opts], Acc) ->
     %% ignore by default
     gun_opts(Opts, Acc).
+
+split_transport_opts(TransportOpts) ->
+    {
+        %% NOTE: Silently dropping "ignored" options.
+        [O || O <- TransportOpts, is_gen_tcp_option(O) == true],
+        [O || O <- TransportOpts, is_gen_tcp_option(O) == false]
+    }.
+
+%% Taken from `gen_tcp` @ OTP-27.2.
+%% -type connect_option() ::
+is_gen_tcp_option({fd, _}) -> true;
+is_gen_tcp_option(AF) when AF == inet orelse AF == inet6 orelse AF == local -> true;
+is_gen_tcp_option({ifaddr, _}) -> true;
+is_gen_tcp_option({ip, _}) -> true;
+is_gen_tcp_option({port, _}) -> true;
+is_gen_tcp_option({netns, _}) -> true;
+is_gen_tcp_option({bind_to_device, _}) -> true;
+%% -type option() ::
+is_gen_tcp_option({active, _}) -> ignore;
+is_gen_tcp_option({buffer, _}) -> true;
+is_gen_tcp_option({debug, _}) -> true;
+is_gen_tcp_option({delay_send, _}) -> true;
+is_gen_tcp_option({deliver, _}) -> ignore;
+is_gen_tcp_option({dontroute, _}) -> true;
+is_gen_tcp_option({exclusiveaddruse, _}) -> ignore;
+is_gen_tcp_option({exit_on_close, _}) -> ignore;
+is_gen_tcp_option({header, _}) -> ignore;
+is_gen_tcp_option({high_msgq_watermark, _}) -> true;
+is_gen_tcp_option({high_watermark, _}) -> true;
+is_gen_tcp_option({keepalive, _}) -> true;
+is_gen_tcp_option({linger, _}) -> true;
+is_gen_tcp_option({low_msgq_watermark, _}) -> true;
+is_gen_tcp_option({low_watermark, _}) -> true;
+is_gen_tcp_option({mode, _}) -> ignore;
+is_gen_tcp_option({nodelay, _}) -> true;
+is_gen_tcp_option({packet, _}) -> ignore;
+is_gen_tcp_option({packet_size, _}) -> ignore;
+is_gen_tcp_option({priority, _}) -> true;
+is_gen_tcp_option({raw, _, _, _}) -> true;
+is_gen_tcp_option({recbuf, _}) -> true;
+is_gen_tcp_option({reuseaddr, _}) -> true;
+is_gen_tcp_option({reuseport, _}) -> true;
+is_gen_tcp_option({reuseport_lb, _}) -> true;
+is_gen_tcp_option({send_timeout, _}) -> true;
+is_gen_tcp_option({send_timeout_close, _}) -> true;
+is_gen_tcp_option({show_econnreset, _}) -> true;
+is_gen_tcp_option({sndbuf, _}) -> true;
+is_gen_tcp_option({tos, _}) -> true;
+is_gen_tcp_option({tclass, _}) -> true;
+is_gen_tcp_option({ttl, _}) -> true;
+is_gen_tcp_option({recvtos, _}) -> true;
+is_gen_tcp_option({recvtclass, _}) -> true;
+is_gen_tcp_option({recvttl, _}) -> true;
+is_gen_tcp_option({ipv6_v6only, _}) -> true;
+is_gen_tcp_option(_) -> false.
 
 do_request(Client, head, {Path, Headers}, TunnelRef) ->
     gun:head(Client, Path, Headers, mk_reqopts(TunnelRef));

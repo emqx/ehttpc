@@ -45,6 +45,38 @@ concurrent_callers_test_() ->
         {timeout, TestTimeout, fun() -> with_pool(Opts4, F) end}
     ].
 
+gun_opts_test() ->
+    %% Verify transport options are correctly split into TCP and TLS option lists.
+    Opts = [
+        {host, ?HOST},
+        {port, 443},
+        {pool_size, ?POOL_SIZE},
+        {pool_type, random},
+        {connect_timeout, 1000},
+        {transport, ssl},
+        {transport_opts, [
+            {mode, binary},
+            {nodelay, true},
+            {high_watermark, 32768},
+            {verify, verify_none},
+            {reuse_sessions, true},
+            {hibernate_after, 5000}
+        ]}
+    ],
+    with_pool(Opts, fun() ->
+        ?assertMatch(
+            {_Worker, #{
+                gun_opts := #{
+                    connect_timeout := 1000,
+                    transport := ssl,
+                    tcp_opts := [{nodelay, _}, {high_watermark, _}],
+                    tls_opts := [{verify, _}, {reuse_sessions, _}, {hibernate_after, _}]
+                }
+            }},
+            ehttpc:get_state(?POOL)
+        )
+    end).
+
 proxy_test_() ->
     N = 50,
     TestTimeout = 1000,
