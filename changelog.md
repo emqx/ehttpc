@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.7.0
+
+- Switch to `gun` 2.1.0.
+- Drop support for Erlang/OTP 25 and earlier.
+
 ## 0.6.0
 
 - Changed log format to be more structured, `host` and `port` are included in the log data fields.
