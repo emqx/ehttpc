@@ -41,10 +41,6 @@
     format_status/1
 ]).
 
--if(?OTP_RELEASE < 25).
--export([format_status/2]).
--endif.
-
 %% introspection
 -export([format_state/2]).
 
@@ -386,14 +382,6 @@ terminate(_Reason, #state{pool = Pool, id = Id, client = Client}) ->
 
 format_status(Status = #{state := State}) ->
     Status#{state => format_state(State, minimal)}.
-
-%% TODO
-%% This is deprecated since OTP-25 in favor of `format_status/1`. Remove once
-%% OTP-25 becomes minimum supported OTP version.
--if(?OTP_RELEASE < 25).
-format_status(_Opt, [_PDict, State]) ->
-    format_state(State, minimal).
--endif.
 
 %%--------------------------------------------------------------------
 %% Internal functions
