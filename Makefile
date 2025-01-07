@@ -6,6 +6,7 @@ all: compile eunit xref dialyzer
 
 compile:
 	@$(REBAR) compile
+
 xref:
 	@$(REBAR) xref
 

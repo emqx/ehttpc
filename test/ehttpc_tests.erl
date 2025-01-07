@@ -391,7 +391,7 @@ server_outage_test_() ->
             case Res of
                 {error, {shutdown, closed}} ->
                     ok;
-                {error, {closed, _}} ->
+                {error, closed} ->
                     ok;
                 Other ->
                     throw({unexpected_result, Other})
@@ -864,7 +864,7 @@ gun_down_with_reason_normal_is_retried_test() ->
                             end
                          || P <- processes(),
                             case proc_lib:initial_call(P) of
-                                {gun, proc_lib_hack, _} -> true;
+                                {gun, init, _} -> true;
                                 _ -> false
                             end
                         ],

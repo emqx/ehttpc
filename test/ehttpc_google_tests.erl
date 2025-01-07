@@ -45,6 +45,38 @@ concurrent_callers_test_() ->
         {timeout, TestTimeout, fun() -> with_pool(Opts4, F) end}
     ].
 
+gun_opts_test() ->
+    %% Verify transport options are correctly split into TCP and TLS option lists.
+    Opts = [
+        {host, ?HOST},
+        {port, 443},
+        {pool_size, ?POOL_SIZE},
+        {pool_type, random},
+        {connect_timeout, 1000},
+        {transport, ssl},
+        {transport_opts, [
+            {mode, binary},
+            {nodelay, true},
+            {high_watermark, 32768},
+            {verify, verify_none},
+            {reuse_sessions, true},
+            {hibernate_after, 5000}
+        ]}
+    ],
+    with_pool(Opts, fun() ->
+        ?assertMatch(
+            {_Worker, #{
+                gun_opts := #{
+                    connect_timeout := 1000,
+                    transport := ssl,
+                    tcp_opts := [{nodelay, _}, {high_watermark, _}],
+                    tls_opts := [{verify, _}, {reuse_sessions, _}, {hibernate_after, _}]
+                }
+            }},
+            ehttpc:get_state(?POOL)
+        )
+    end).
+
 proxy_test_() ->
     N = 50,
     TestTimeout = 1000,
@@ -52,18 +84,11 @@ proxy_test_() ->
     Port = ?PORT,
     ProxyOpts0 = #{host => "127.0.0.1", port => 8888},
     ProxyOpts1 = ProxyOpts0#{username => "user", password => "pass"},
-    %%                host  port  enable_pipelining prioritise_latest
-    Opts1_ = pool_opts(Host, Port, true, true),
-    Opts2_ = pool_opts(Host, Port, true, false),
-    Opts3_ = pool_opts(Host, Port, false, true),
-    Opts4_ = pool_opts(Host, Port, false, false),
-    [Opts1, Opts2, Opts3, Opts4] = [
-        [{proxy, ProxyOpts0} | O]
-     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
-    ],
-    [Opts5, Opts6, Opts7, Opts8] = [
-        [{proxy, ProxyOpts1} | O]
-     || O <- [Opts1_, Opts2_, Opts3_, Opts4_]
+    [Opts1, Opts2, Opts3, Opts4, Opts5, Opts6, Opts7, Opts8] = [
+        [{proxy, ProxyOpts} | pool_opts(Host, Port, Pipeline, PrioLatest)]
+     || ProxyOpts <- [ProxyOpts0, ProxyOpts1],
+        Pipeline <- [true, false],
+        PrioLatest <- [true, false]
     ],
     F = fun() -> req_async(?METHOD, N) end,
     NoAuthConfPath = filename:absname("test/scripts/tinyproxy.conf"),

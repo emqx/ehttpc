@@ -15,9 +15,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp:
-          - 26.1
-          - 25.3
+        erlang:
+          - otp: "25"
+            rebar3: "3.22"
+          - otp: "26"
+            rebar3: "3.22"
+          - otp: "27"
+            rebar3: "3.24"
 
     steps:
     - uses: actions/checkout@v3
@@ -27,8 +31,8 @@ jobs:
       run: git fetch --tags
     - uses: erlef/setup-beam@v1
       with:
-        otp-version: ${{ matrix.otp }}
-        rebar3-version: 3
+        otp-version: ${{ matrix.erlang.otp }}
+        rebar3-version: ${{ matrix.erlang.rebar3 }}
     - name: Ensure style
       run: ./check-style.sh
     - name: setup tinyproxy
