@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.7.1
+
+- Reply error to async callbacks when request expired.
+
 ## 0.7.0
 
 - Switch to `gun` 2.1.0.
