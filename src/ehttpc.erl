@@ -19,6 +19,10 @@
 
 -behaviour(gen_server).
 
+%% proc_lib:set_label/1 is not exported before OTP 27
+-dialyzer([{nowarn_function, [init/1]}]).
+-ignore_xref({proc_lib, set_label, 1}).
+
 %% APIs
 -export([
     start_link/3,
@@ -262,6 +266,13 @@ init([Pool, Id, Opts0]) ->
         max_inactive = MaxInactive
     },
     true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
+
+    case erlang:function_exported(proc_lib, set_label, 1) of
+        true ->
+            proc_lib:set_label({ehttpc, Pool, Id});
+        false ->
+            ignore
+    end,
     {ok, start_check_inactive_timer(State)}.
 
 handle_call({health_check, _}, _From, State = #state{gun_state = up}) ->
@@ -736,7 +747,9 @@ maybe_shoot(
                     ]),
                     inactive_duration_threshold => MaxInactive,
                     inflight_requests => SentCount,
-                    connection_pid => Client
+                    connection_pid => Client,
+                    pool => State#state.pool,
+                    id => State#state.id
                 },
                 State
             ),

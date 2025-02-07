@@ -28,7 +28,7 @@ start_link(Pool, Opts) ->
 init([Pool, Opts]) ->
     WorkerSpec = fun(Id) ->
         #{
-            id => {worker, Id},
+            id => {Pool, Id},
             start => {ehttpc, start_link, [Pool, Id, Opts]},
             restart => transient,
             shutdown => 5000,
