@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.7.1
+
+- Add `pool` and `id` to the worker process label.
+
 ## 0.7.0
 
 - Switch to `gun` 2.1.0.
