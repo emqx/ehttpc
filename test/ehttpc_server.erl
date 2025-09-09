@@ -49,6 +49,7 @@ stop(undefined) ->
 stop(Name) when is_atom(Name) -> stop(whereis(Name));
 stop(Pid) ->
     Mref = monitor(process, Pid),
+    unlink(Pid),
     Pid ! stop,
     receive
         {'DOWN', Mref, _, _, _} ->

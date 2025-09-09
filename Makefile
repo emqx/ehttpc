@@ -1,4 +1,4 @@
-.PHONY: deps test
+.PHONY: compile xref clean ct cover edoc dialyzer eunit fmt fmt-check
 
 REBAR=rebar3
 
@@ -28,3 +28,9 @@ dialyzer:
 eunit:
 	@$(REBAR) eunit -v -c
 	@$(REBAR) cover
+
+fmt:
+	@$(REBAR) fmt -w
+
+fmt-check:
+	@$(REBAR) fmt -c

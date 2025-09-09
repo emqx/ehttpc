@@ -37,8 +37,10 @@ jobs:
       run: ./check-style.sh
     - name: setup tinyproxy
       run: sudo ./test/scripts/setup_tinyproxy.sh
+    - name: Check Format
+      run: make fmt-check
     - name: Compile
-      run: rebar3 compile
+      run: make compile
     - name: Run tests
       run: make eunit
     - name: Run dialyzer
