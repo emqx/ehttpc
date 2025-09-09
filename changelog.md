@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.7.2
+
+- Fix rebar.config.
+
 ## 0.7.1
 
 - Add `pool` and `id` to the worker process label.
