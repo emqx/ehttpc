@@ -103,3 +103,29 @@ check_pool_integrity_test() ->
     ok = ehttpc_sup:stop_pool(Pool),
     ?assertEqual({error, not_found}, ehttpc:check_pool_integrity(Pool)),
     ok.
+
+%% Previously, we had a fixed restart intensity for the worker supervisor, meaning that if
+%% a large pool dies once, it brings down the supervisor.  This checks that we have an
+%% intensity proportional to the pool size, so the whole pool may restart at once without
+%% bringing the supervisor down.
+big_pool_dies_and_recovers_test() ->
+    Pool = atom_to_binary(?FUNCTION_NAME),
+    Opts = [
+        {host, "google.com"},
+        {port, "80"},
+        {enable_pipelining, 1},
+        %% N.B.: big pool
+        {pool_size, 50},
+        {pool_type, random},
+        {connect_timeout, 5000},
+        {prioritise_latest, true}
+    ],
+    application:ensure_all_started(ehttpc),
+    {ok, _} = ehttpc_sup:start_pool(Pool, Opts),
+    %% Kill all workers at once.
+    Workers = ehttpc:workers(Pool),
+    lists:foreach(fun({_Id, Pid}) -> exit(Pid, kill) end, Workers),
+    timer:sleep(100),
+    ?assertEqual(ok, ehttpc:check_pool_integrity(Pool)),
+    ok = ehttpc_sup:stop_pool(Pool),
+    ok.
