@@ -23,7 +23,8 @@
 %% API
 -export([
     start_pool/2,
-    stop_pool/1
+    stop_pool/1,
+    check_pool_integrity/1
 ]).
 
 %% Supervisor callbacks
@@ -33,6 +34,16 @@
 -spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+
+-spec check_pool_integrity(ehttpc:pool_name()) ->
+    ok | {error, {processes_down, [root | pool | worker_sup]} | not_found}.
+check_pool_integrity(Pool) ->
+    case get_child(child_id(Pool)) of
+        {ok, SupPid} ->
+            do_check_pool_integrity_root(SupPid);
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %%--------------------------------------------------------------------
 %% Start/Stop a pool
@@ -72,3 +83,39 @@ pool_spec(Pool, Opts) ->
     }.
 
 child_id(Pool) -> {ehttpc_pool_sup, Pool}.
+
+%%--------------------------------------------------------------------
+%% Internal fns
+%%--------------------------------------------------------------------
+
+get_child(Id) ->
+    Res = [Child || {Id0, Child, supervisor, _} <- supervisor:which_children(?MODULE), Id == Id0],
+    case Res of
+        [] ->
+            {error, not_found};
+        [undefined] ->
+            {error, dead};
+        [restarting] ->
+            {error, restarting};
+        [Pid] when is_pid(Pid) ->
+            {ok, Pid}
+    end.
+
+do_check_pool_integrity_root(SupPid) ->
+    try supervisor:which_children(SupPid) of
+        Children ->
+            %% We ignore `restarting` here because those processes are still being
+            %% managed.
+            DeadChildren = [Id || {Id, undefined, _, _} <- Children],
+            %% Currently, at root, we only have one supervisor: `ehttpc_worker_sup`, and
+            %% it does not contain other supervisors under it, so no need to dig deeper.
+            case DeadChildren of
+                [_ | _] ->
+                    {error, {processes_down, DeadChildren}};
+                [] ->
+                    ok
+            end
+    catch
+        exit:{noproc, _} ->
+            {error, {processes_down, [root]}}
+    end.

@@ -32,6 +32,7 @@
     request_async/5,
     workers/1,
     health_check/2,
+    check_pool_integrity/1,
     name/1
 ]).
 
@@ -234,6 +235,11 @@ mk_async_request(delete = Method, Req, ExpireAt, RC) when ?IS_HEADERS_REQ(Req) -
 
 workers(Pool) ->
     gproc_pool:active_workers(name(Pool)).
+
+-spec check_pool_integrity(pool_name()) ->
+    ok | {error, {processes_down, [root | pool | worker_sup]} | not_found}.
+check_pool_integrity(Pool) ->
+    ehttpc_sup:check_pool_integrity(Pool).
 
 name(Pool) -> {?MODULE, Pool}.
 
