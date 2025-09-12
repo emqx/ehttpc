@@ -1,5 +1,15 @@
 # ehttpc changes
 
+## 0.7.3
+
+- Previously, we had a fixed restart intensity for the worker supervisor, meaning that if a
+  large pool dies once, it brings down the supervisor. Here, we have an intensity
+  proportional to the pool size, so the whole pool may restart at once without bringing the
+  supervisor down.
+- Added an `ehttpc:check_pool_integrity/1` function to check whether the supervision tree
+  is whole (i.e., no children of the root supervisor are permanently dead and won't be
+  restarted).
+
 ## 0.7.2
 
 - Fix rebar.config.
