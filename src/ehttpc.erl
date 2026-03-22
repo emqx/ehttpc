@@ -78,6 +78,12 @@
 -define(GEN_CALL_REQ(From, Call), {'$gen_call', From, ?REQ(_, _, _) = Call}).
 -define(undef, undefined).
 -define(IS_POOL(Pool), (not is_tuple(Pool) andalso not is_pid(Pool))).
+-define(DEFAULT_MAX_INACTIVE, 10000).
+
+%% use process dictionary for inactive check state for ad-hoc c:l(ehttpc)
+-define(PD_MAX_INACTIVE, {?MODULE, max_inactive}).
+-define(PD_INACTIVE_CHECK_TREF, {?MODULE, inactive_check_tref}).
+-define(PD_MAX_SENT_EXPIRE, {?MODULE, max_sent_expire}).
 
 -record(state, {
     pool :: term(),
@@ -191,6 +197,7 @@ name(Pool) -> {?MODULE, Pool}.
 
 init([Pool, Id, Opts]) ->
     process_flag(trap_exit, true),
+    ok = init_runtime_state(Opts),
     PrioLatest = proplists:get_bool(prioritise_latest, Opts),
     State = #state{
         pool = Pool,
@@ -259,10 +266,25 @@ handle_info({suspend, Time}, State) ->
     %% only for testing
     timer:sleep(Time),
     {noreply, State};
+handle_info(check_inactive, State0) ->
+    State = maybe_shoot(upgrade_requests(State0)),
+    {noreply, start_check_inactive_timer(State)};
 handle_info(Info, State0) ->
     State1 = do_handle_info(Info, upgrade_requests(State0)),
     State = maybe_shoot(State1),
     {noreply, State}.
+
+start_check_inactive_timer(State) ->
+    MaxInactive = get_max_inactive(),
+    case erlang:get(?PD_INACTIVE_CHECK_TREF) of
+        OldTRef when is_reference(OldTRef) ->
+            erlang:cancel_timer(OldTRef);
+        _ ->
+            ok
+    end,
+    NewTRef = erlang:send_after(MaxInactive, self(), check_inactive),
+    _ = erlang:put(?PD_INACTIVE_CHECK_TREF, NewTRef),
+    State.
 
 do_handle_info(
     {gun_response, Client, StreamRef, IsFin, StatusCode, Headers},
@@ -565,6 +587,57 @@ timeout(ExpireAt) ->
 now_() ->
     erlang:system_time(millisecond).
 
+init_runtime_state(Opts) ->
+    MaxInactive = proplists:get_value(max_inactive, Opts, ?DEFAULT_MAX_INACTIVE),
+    _ = erlang:put(?PD_MAX_INACTIVE, MaxInactive),
+    _ = erlang:put(?PD_MAX_SENT_EXPIRE, 0),
+    ok.
+
+get_max_inactive() ->
+    case erlang:get(?PD_MAX_INACTIVE) of
+        V when is_integer(V), V > 0 ->
+            V;
+        _ ->
+            ?DEFAULT_MAX_INACTIVE
+    end.
+
+get_max_sent_expire() ->
+    case erlang:get(?PD_MAX_SENT_EXPIRE) of
+        V when is_integer(V), V >= 0 ->
+            V;
+        _ ->
+            0
+    end.
+
+track_sent_req(?SENT_REQ(_, infinity, _)) ->
+    ensure_inactive_timer_started(),
+    ok;
+track_sent_req(?SENT_REQ(_, ExpireAt, _)) when is_integer(ExpireAt) ->
+    ensure_inactive_timer_started(),
+    _ = erlang:put(?PD_MAX_SENT_EXPIRE, max(get_max_sent_expire(), ExpireAt)),
+    ok.
+
+ensure_inactive_timer_started() ->
+    case erlang:get(?PD_INACTIVE_CHECK_TREF) of
+        TRef when is_reference(TRef) ->
+            ok;
+        _ ->
+            _ = start_check_inactive_timer(ok),
+            ok
+    end.
+
+update_max_sent_expire_after_take(NewSent) ->
+    case map_size(NewSent) of
+        0 ->
+            reset_max_sent_expire();
+        _ ->
+            ok
+    end.
+
+reset_max_sent_expire() ->
+    _ = erlang:put(?PD_MAX_SENT_EXPIRE, 0),
+    ok.
+
 %% =================================================================================
 %% sent requests
 %% =================================================================================
@@ -587,6 +660,7 @@ upgrade_requests(Map) when is_map(Map) ->
     }.
 
 put_sent_req(StreamRef, Req, #{sent := Sent} = Requests) ->
+    track_sent_req(Req),
     Requests#{sent := maps:put(StreamRef, Req, Sent)}.
 
 take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
@@ -594,6 +668,7 @@ take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
         error ->
             error;
         {Req, NewSent} ->
+            update_max_sent_expire_after_take(NewSent),
             case is_sent_req_expired(Req, now_()) of
                 true ->
                     {expired, Requests#{sent := NewSent}};
@@ -628,14 +703,8 @@ reply_error_for_sent_reqs(#{sent := Sent} = R, Reason) ->
         end,
         maps:to_list(Sent)
     ),
+    reset_max_sent_expire(),
     R#{sent := #{}}.
-
-%% allow 100 async requests maximum when enable_pipelining is 'true'
-%% allow only 1 async request when enable_pipelining is 'false'
-%% otherwise stop shooting at the number limited by enable_pipelining
-should_cool_down(true, Sent) -> Sent >= 100;
-should_cool_down(false, Sent) -> Sent > 0;
-should_cool_down(N, Sent) when is_integer(N) -> Sent >= N.
 
 %% Continue droping expired requests, to avoid the state RAM usage
 %% explosion if http client can not keep up.
@@ -685,17 +754,66 @@ enqueue_req(ReplyTo, Req, #state{requests = Requests0} = State) ->
 maybe_shoot(#state{enable_pipelining = EP, requests = Requests0, client = Client} = State0) ->
     #{sent := Sent} = Requests0,
     State = State0#state{requests = drop_expired(Requests0)},
-    %% If the gun http client is down
-    ClientDown = is_pid(Client) andalso (not is_process_alive(Client)),
-    %% Or when too many has been sent already
-    case ClientDown orelse should_cool_down(EP, maps:size(Sent)) of
-        true ->
+    case check_gun(Client, EP, maps:size(Sent)) of
+        pause ->
             %% Then we should cool down, and let the gun responses
             %% or 'DOWN' message to trigger the flow again
             ?tp(cool_down, #{enable_pipelining => EP}),
             State;
-        false ->
-            do_shoot(State)
+        continue ->
+            do_shoot(State);
+        reconnect ->
+            ?tp(reconnect, #{sent => maps:size(Sent)}),
+            ?LOG(
+                error,
+                "Inactive HTTP connection detected for host=~p port=~p, inflight=~p, reconnecting",
+                [State#state.host, State#state.port, maps:size(Sent)]
+            ),
+            _ = exit(Client, kill),
+            State
+    end.
+
+check_gun(ClientPid, PipelineLimit, SentCount) ->
+    case check_gun_pid(ClientPid) of
+        ok ->
+            case check_gun_jammed(SentCount) of
+                ok ->
+                    check_gun_limit(PipelineLimit, SentCount);
+                reconnect ->
+                    reconnect
+            end;
+        pause ->
+            pause;
+        continue ->
+            continue
+    end.
+
+check_gun_pid(Pid) when not is_pid(Pid) ->
+    continue;
+check_gun_pid(Pid) ->
+    case is_process_alive(Pid) of
+        true -> ok;
+        false -> pause
+    end.
+
+check_gun_jammed(0) ->
+    ok;
+check_gun_jammed(_SentCount) ->
+    MaxExpireTs = get_max_sent_expire(),
+    MaxInactive = get_max_inactive(),
+    case MaxExpireTs > 0 andalso now_() - MaxExpireTs > MaxInactive of
+        true -> reconnect;
+        false -> ok
+    end.
+
+check_gun_limit(true, SentCount) ->
+    check_gun_limit(100, SentCount);
+check_gun_limit(false, SentCount) ->
+    check_gun_limit(1, SentCount);
+check_gun_limit(PipelineLimit, SentCount) when is_integer(PipelineLimit) ->
+    case SentCount < PipelineLimit of
+        true -> continue;
+        false -> pause
     end.
 
 do_shoot(#state{requests = #{pending_count := 0}} = State) ->

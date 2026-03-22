@@ -452,7 +452,7 @@ cool_down_after_5_reqs_test() ->
         oneoff => false
     },
     PoolOpts = pool_opts("127.0.0.1", Port, _Pipelining = 5, _PrioritiseLatest = false),
-    Reqs = [{"/", [], iolist_to_binary(["test-put-", integer_to_list(I)])} || I <- lists:seq(1, 6)],
+    Reqs = [iolist_to_binary(["test-put-", integer_to_list(I)]) || I <- lists:seq(1, 6)],
     ?WITH(
         ServerOpts,
         PoolOpts,
@@ -469,6 +469,80 @@ cool_down_after_5_reqs_test() ->
             #{sent := Sent, pending_count := PendingCount} = Requests,
             ?assertEqual(5, maps:size(Sent)),
             ?assertEqual(1, PendingCount),
+            ok
+        end
+    ).
+
+zombie_detect_inflight_not_full_test() ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => ?FUNCTION_NAME,
+        delay => 30_000,
+        oneoff => false
+    },
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1000} | PoolOpts0],
+    Reqs = [iolist_to_binary(["test-put-", integer_to_list(I)]) || I <- lists:seq(1, Pipelining - 1)],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            lists:foreach(
+                fun(Req) ->
+                    spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], Req}, 100) end)
+                end,
+                Reqs
+            ),
+            Pid = ehttpc_pool:pick_worker(?POOL),
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 2500, infinity),
+            {ok, _} = ?block_until(#{?snk_kind := handle_client_down}, 1000, infinity),
+            #{requests := Requests} = ehttpc:get_state(Pid, normal),
+            #{sent := Sent, pending_count := PendingCount} = Requests,
+            ?assertEqual(0, maps:size(Sent)),
+            ?assertEqual(0, PendingCount),
+            ok
+        end
+    ).
+
+zombie_detect_inflight_full_test() ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => ?FUNCTION_NAME,
+        delay => 30_000,
+        oneoff => false
+    },
+    Pipelining = 5,
+    PoolOpts0 = pool_opts("127.0.0.1", Port, Pipelining, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1000} | PoolOpts0],
+    Reqs = [iolist_to_binary(["test-put-", integer_to_list(I)]) || I <- lists:seq(1, Pipelining)],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            lists:foreach(
+                fun(Req) ->
+                    spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], Req}, 100) end)
+                end,
+                Reqs
+            ),
+            Pid = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            Callback = {fun(Reason) -> Tester ! {reason, Reason} end, []},
+            ehttpc:request_async(Pid, put, {<<"/">>, [], <<"foo">>}, 100, Callback),
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 2500, infinity),
+            receive
+                {reason, Reason} ->
+                    ?assertEqual({error, killed}, Reason)
+            after 2500 ->
+                error(timeout)
+            end,
+            #{requests := Requests} = ehttpc:get_state(Pid, normal),
+            #{sent := Sent, pending_count := PendingCount} = Requests,
+            ?assertEqual(0, maps:size(Sent)),
+            ?assertEqual(0, PendingCount),
             ok
         end
     ).

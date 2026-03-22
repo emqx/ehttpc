@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.4.9.1
+
+- Add a zombie connection detection. Force reconnect after the oldest requst has been set for more than 10s.
+
 ## 0.4.9
 
 - Expanded the fix from 0.4.8 to also account for `{error, {shutdown, normal}}` return values in requests, and added a similar retry when the health check also fails with those two reasons.
