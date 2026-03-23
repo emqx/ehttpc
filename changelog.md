@@ -2,7 +2,7 @@
 
 ## 0.4.9.1
 
-- Add a zombie connection detection. Force reconnect after the newest request has been sent for more than 10s.
+- Add zombie connection detection. Force reconnect when inflight requests remain unanswered for more than 10s past their request timeout.
 
 ## 0.4.9
 

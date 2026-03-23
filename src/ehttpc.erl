@@ -268,7 +268,7 @@ handle_info({suspend, Time}, State) ->
     {noreply, State};
 handle_info(check_inactive, State0) ->
     State = maybe_shoot(upgrade_requests(State0)),
-    {noreply, start_check_inactive_timer(State)};
+    {noreply, maybe_reschedule_inactive_timer(State)};
 handle_info(Info, State0) ->
     State1 = do_handle_info(Info, upgrade_requests(State0)),
     State = maybe_shoot(State1),
@@ -285,6 +285,15 @@ start_check_inactive_timer(State) ->
     NewTRef = erlang:send_after(MaxInactive, self(), check_inactive),
     _ = erlang:put(?PD_INACTIVE_CHECK_TREF, NewTRef),
     State.
+
+maybe_reschedule_inactive_timer(State) ->
+    _ = erlang:erase(?PD_INACTIVE_CHECK_TREF),
+    case get_max_sent_expire() of
+        0 ->
+            State;
+        _ ->
+            start_check_inactive_timer(State)
+    end.
 
 do_handle_info(
     {gun_response, Client, StreamRef, IsFin, StatusCode, Headers},
