@@ -2,7 +2,7 @@
 
 ## 0.4.9.1
 
-- Add a zombie connection detection. Force reconnect after the oldest requst has been set for more than 10s.
+- Add a zombie connection detection. Force reconnect after the newest request has been sent for more than 10s.
 
 ## 0.4.9
 
