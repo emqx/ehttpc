@@ -28,6 +28,11 @@ start_link(Pool, Opts) ->
     supervisor:start_link(?MODULE, [Pool, Opts]).
 
 init([Pool, Opts]) ->
+    SupFlags = #{
+        strategy => one_for_all,
+        intensity => 10,
+        period => 100
+    },
     Specs = [
         #{
             id => pool,
@@ -40,10 +45,10 @@ init([Pool, Opts]) ->
         #{
             id => worker_sup,
             start => {ehttpc_worker_sup, start_link, [Pool, Opts]},
-            restart => transient,
-            shutdown => 5000,
+            restart => permanent,
+            shutdown => infinity,
             type => supervisor,
             modules => [ehttpc_worker_sup]
         }
     ],
-    {ok, {{one_for_all, 10, 100}, Specs}}.
+    {ok, {SupFlags, Specs}}.

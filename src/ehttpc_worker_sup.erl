@@ -37,8 +37,9 @@ init([Pool, Opts]) ->
         #{
             id => {Pool, Id},
             start => {ehttpc, start_link, [Pool, Id, Opts]},
-            restart => transient,
-            shutdown => 5000,
+            restart => permanent,
+            %% important: use brutal_kill for fast shutdown
+            shutdown => brutal_kill,
             type => worker,
             modules => [ehttpc]
         }
