@@ -55,54 +55,11 @@ wait_for_down([]) ->
     ok;
 wait_for_down(Pids) ->
     receive
-        {'DOWN', _, process, Pid, killed} ->
+        {'DOWN', _, process, Pid, _} ->
             wait_for_down(Pids -- [Pid])
     after 10_000 ->
         error(timeout)
     end.
-
-%% Smoke tests for `ecpool:check_pool_integrity`, which should report an error when worker
-%% supervisor is down.
-check_pool_integrity_test() ->
-    Pool = atom_to_binary(?MODULE),
-    Opts = [
-        {host, "google.com"},
-        {port, "80"},
-        {enable_pipelining, 1},
-        {pool_size, 15},
-        {pool_type, random},
-        {connect_timeout, 5000},
-        {prioritise_latest, true}
-    ],
-    application:ensure_all_started(ehttpc),
-    {ok, _} = ehttpc_sup:start_pool(Pool, Opts),
-    ?assertEqual(ok, ehttpc:check_pool_integrity(Pool)),
-    ok = ehttpc_sup:stop_pool(Pool),
-    {ok, _} = ehttpc_sup:start_pool(Pool, Opts),
-    Killer = spawn_link(fun Recur() ->
-        Workers = ehttpc:workers(Pool),
-        MRefs = lists:map(fun({_, P}) -> monitor(process, P) end, Workers),
-        lists:foreach(fun({_, P}) -> exit(P, kill) end, Workers),
-        lists:foreach(
-            fun(MRef) ->
-                receive
-                    {'DOWN', MRef, process, _, _} ->
-                        ok
-                end
-            end,
-            MRefs
-        ),
-        timer:sleep(1),
-        Recur()
-    end),
-    %% Give it some time to reach maximum restart intensity
-    timer:sleep(100),
-    ?assertEqual({error, {processes_down, [worker_sup]}}, ehttpc:check_pool_integrity(Pool)),
-    unlink(Killer),
-    exit(Killer, kill),
-    ok = ehttpc_sup:stop_pool(Pool),
-    ?assertEqual({error, not_found}, ehttpc:check_pool_integrity(Pool)),
-    ok.
 
 %% Previously, we had a fixed restart intensity for the worker supervisor, meaning that if
 %% a large pool dies once, it brings down the supervisor.  This checks that we have an

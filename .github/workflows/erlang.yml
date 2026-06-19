@@ -22,6 +22,8 @@ jobs:
             rebar3: "3.22"
           - otp: "27"
             rebar3: "3.24"
+          - otp: "28"
+            rebar3: "3.25"
 
     steps:
     - uses: actions/checkout@v3
