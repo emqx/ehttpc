@@ -482,6 +482,8 @@ gun_opts([{retry_timeout, _} | Opts], Acc) ->
     gun_opts(Opts, Acc);
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
+gun_opts([{protocols, Protocols} | Opts], Acc) ->
+    gun_opts(Opts, Acc#{protocols => Protocols});
 gun_opts([{transport, Transport} | Opts0], Acc0) ->
     Acc1 = Acc0#{transport => Transport},
     case lists:keytake(transport_opts, 1, Opts0) of
