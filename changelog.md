@@ -1,5 +1,10 @@
 # ehttpc changes
 
+## 0.7.5
+
+- Added the possibility of choosing HTTP2 as the protocol.
+- Added `cancel/2` and new allowed callback API to enable cancelling HTTP2 streams.
+
 ## 0.7.3
 
 - Previously, we had a fixed restart intensity for the worker supervisor, meaning that if a
