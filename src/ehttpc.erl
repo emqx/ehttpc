@@ -69,7 +69,7 @@
     {function(), list()}
     | #{
         %% where to send the final results
-        final_result := {function(), list()},
+        final_reply := {function(), list()},
         %% optional; sends the gun stream ref and the worker pid so the caller may cancel
         %% it.
         stream_ref => {function(), list()}
