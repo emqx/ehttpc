@@ -1,6 +1,6 @@
 {application, ehttpc, [
     {description, "HTTP Client for Erlang/OTP"},
-    {vsn, "0.7.3"},
+    {vsn, "0.7.5"},
     {registered, []},
     {applications, [
         kernel,

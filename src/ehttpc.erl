@@ -30,6 +30,7 @@
     request/4,
     request/5,
     request_async/5,
+    cancel/2,
     workers/1,
     health_check/2,
     check_pool_integrity/1,
@@ -64,7 +65,15 @@
 -type path() :: binary() | string().
 -type headers() :: [{binary(), iodata()}].
 -type body() :: iodata().
--type callback() :: {function(), list()}.
+-type callback() ::
+    {function(), list()}
+    | #{
+        %% where to send the final results
+        final_reply := {function(), list()},
+        %% optional; sends the gun stream ref and the worker pid so the caller may cancel
+        %% it.
+        stream_ref => {function(), list()}
+    }.
 -type request() :: path() | {path(), headers()} | {path(), headers(), body()}.
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
@@ -91,6 +100,8 @@
     (tuple_size(REQ) =:= 3 andalso is_list(element(2, REQ)) andalso
         (is_binary(element(3, REQ)) orelse is_list(element(3, REQ))))
 ).
+
+-record(cancel, {stream_ref :: reference()}).
 
 -record(state, {
     pool :: term(),
@@ -211,7 +222,8 @@ mk_request(put = Method, Req, ExpireAt) when ?IS_BODY_REQ(Req) ->
 mk_request(delete = Method, Req, ExpireAt) when ?IS_HEADERS_REQ(Req) ->
     ?REQ(Method, Req, ExpireAt).
 
-%% @doc Send an async request. The callback is evaluated when an error happens or http response is received.
+%% @doc Send an async request. The callback is evaluated when an error happens or http
+%% response is received.
 -spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
 request_async(Worker, Method, Request, Timeout, ResultCallback) when is_pid(Worker) ->
     ExpireAt = fresh_expire_at(Timeout),
@@ -232,6 +244,9 @@ mk_async_request(put = Method, Req, ExpireAt, RC) when ?IS_BODY_REQ(Req) ->
     ?ASYNC_REQ(Method, Req, ExpireAt, RC);
 mk_async_request(delete = Method, Req, ExpireAt, RC) when ?IS_HEADERS_REQ(Req) ->
     ?ASYNC_REQ(Method, Req, ExpireAt, RC).
+
+cancel(Worker, StreamRef) ->
+    gen_server:cast(Worker, #cancel{stream_ref = StreamRef}).
 
 workers(Pool) ->
     gproc_pool:active_workers(name(Pool)).
@@ -315,6 +330,10 @@ handle_call(Call, _From, State0) ->
     State = maybe_shoot(State0),
     {reply, {error, {unexpected_call, Call}}, State}.
 
+handle_cast(#cancel{stream_ref = StreamRef}, State0) ->
+    State1 = handle_cancel_stream(State0, StreamRef),
+    State = maybe_shoot(State1),
+    {noreply, State};
 handle_cast(_Msg, State0) ->
     State = maybe_shoot(State0),
     {noreply, State}.
@@ -482,6 +501,8 @@ gun_opts([{retry_timeout, _} | Opts], Acc) ->
     gun_opts(Opts, Acc);
 gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
+gun_opts([{protocols, Protocols} | Opts], Acc) ->
+    gun_opts(Opts, Acc#{protocols => Protocols});
 gun_opts([{transport, Transport} | Opts0], Acc0) ->
     Acc1 = Acc0#{transport => Transport},
     case lists:keytake(transport_opts, 1, Opts0) of
@@ -700,6 +721,9 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
 maybe_reply_timeout({F, A}) when is_function(F) ->
     _ = erlang:apply(F, A ++ [{error, timeout}]),
     ok;
+maybe_reply_timeout(#{final_reply := {F, A}}) when is_function(F) ->
+    _ = erlang:apply(F, A ++ [{error, timeout}]),
+    ok;
 maybe_reply_timeout(_) ->
     %% This is not a callback, but the gen_server:call's From
     %% The caller should have alreay given up waiting for a reply,
@@ -868,6 +892,7 @@ shoot(
     }
 ) when is_pid(Client) ->
     StreamRef = do_request(Client, Method, Request, TunnelRef),
+    maybe_send_stream_ref(ReplyTo, StreamRef),
     ?tp(shot, #{from => ReplyTo, req => Request, reqs => Requests}),
     %% no need for the payload
     Req = ?SENT_REQ(ReplyTo, ExpireAt, ?undef),
@@ -891,6 +916,22 @@ do_after_gun_up(State0 = #state{client = Client}, ExpireAt, Fun) ->
         {error, Reason} ->
             {reply, {error, Reason}, State#state{client = ?undef}}
     end.
+
+handle_cancel_stream(#state{requests = Requests0} = State0, StreamRef) ->
+    do_cancel_gun_stream(State0, StreamRef),
+    case take_sent_req(StreamRef, Requests0) of
+        error ->
+            State0;
+        {_, Requests} ->
+            %% caller explicitly requested the cancel; no need to reply to it.
+            State0#state{requests = Requests}
+    end.
+
+do_cancel_gun_stream(#state{client = Client}, StreamRef) when is_pid(Client) ->
+    _ = gun:cancel(Client, StreamRef),
+    ok;
+do_cancel_gun_stream(_State, _StreamRef) ->
+    ok.
 
 %% This is a copy of gun:await_up/3
 %% with the '$gen_call' clause added so the calls in the mail box
@@ -1004,8 +1045,19 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
 reply({F, A}, Result) when is_function(F) ->
     _ = erlang:apply(F, A ++ [Result]),
     ok;
+reply(#{final_reply := FinalReply}, Result) ->
+    %% assert
+    {F, A} = FinalReply,
+    _ = erlang:apply(F, A ++ [Result]),
+    ok;
 reply(From, Result) ->
     gen_server:reply(From, Result).
+
+maybe_send_stream_ref(#{stream_ref := {F, A}}, StreamRef) when is_function(F) ->
+    _ = erlang:apply(F, [StreamRef, self() | A]),
+    ok;
+maybe_send_stream_ref(_ReplyTo, _StreamRef) ->
+    ok.
 
 peek_oldest_fn(#{prioritise_latest := true}) ->
     {fun queue:peek_r/1, fun queue:out_r/1};
