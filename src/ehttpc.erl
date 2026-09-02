@@ -65,15 +65,23 @@
 -type path() :: binary() | string().
 -type headers() :: [{binary(), iodata()}].
 -type body() :: iodata().
+-type callback_fun() :: {function(), [term()]}.
 -type callback() ::
-    {function(), list()}
+    callback_fun()
     | #{
         %% where to send the final results
-        final_reply := {function(), list()},
+        final_reply := callback_fun(),
         %% optional; sends the gun stream ref and the worker pid so the caller may cancel
         %% it.
-        stream_ref => {function(), list()}
+        stream_ref => callback_fun()
     }.
+-type normalized_callback() :: #{
+    final_reply := callback_fun(),
+    stream_ref => callback_fun()
+}.
+-type reply_target() ::
+    {sync, gen_server:from()}
+    | {async, normalized_callback()}.
 -type request() :: path() | {path(), headers()} | {path(), headers(), body()}.
 
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
@@ -226,9 +234,14 @@ mk_request(delete = Method, Req, ExpireAt) when ?IS_HEADERS_REQ(Req) ->
 %% response is received.
 -spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
 request_async(Worker, Method, Request, Timeout, ResultCallback) when is_pid(Worker) ->
-    ExpireAt = fresh_expire_at(Timeout),
-    _ = erlang:send(Worker, mk_async_request(Method, Request, ExpireAt, ResultCallback)),
-    ok.
+    case normalize_callback(ResultCallback) of
+        {ok, Callback} ->
+            ExpireAt = fresh_expire_at(Timeout),
+            _ = erlang:send(Worker, mk_async_request(Method, Request, ExpireAt, Callback)),
+            ok;
+        {error, Reason} ->
+            error({invalid_callback, Reason})
+    end.
 
 mk_async_request(head = Method, Req, ExpireAt, RC) when ?IS_HEADERS_REQ(Req) ->
     ?ASYNC_REQ(Method, Req, ExpireAt, RC);
@@ -323,7 +336,7 @@ handle_call({health_check, Timeout}, _From, State = #state{client = Client, gun_
         end
     );
 handle_call(?REQ(_Method, _Request, _ExpireAt) = Req, From, State0) ->
-    State1 = enqueue_req(From, Req, State0),
+    State1 = enqueue_req({sync, From}, Req, State0),
     State = maybe_shoot(State1),
     {noreply, State};
 handle_call(Call, _From, State0) ->
@@ -340,7 +353,7 @@ handle_cast(_Msg, State0) ->
 
 handle_info(?ASYNC_REQ(Method, Request, ExpireAt, ResultCallback), State0) ->
     Req = ?REQ(Method, Request, ExpireAt),
-    State1 = enqueue_req(ResultCallback, Req, State0),
+    State1 = enqueue_async_req(ResultCallback, Req, State0),
     State = maybe_shoot(State1),
     {noreply, State};
 handle_info({suspend, Time}, State) ->
@@ -664,13 +677,13 @@ take_sent_req(StreamRef, #{sent := Sent, max_sent_expire := T} = Requests) ->
             end
     end.
 
-is_sent_req_expired(?SENT_REQ(_From, infinity = _ExpireAt, _), _Now) ->
+is_sent_req_expired(?SENT_REQ({sync, _From}, infinity = _ExpireAt, _), _Now) ->
     false;
-is_sent_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) when is_pid(Pid) ->
+is_sent_req_expired(?SENT_REQ({sync, {Pid, _Ref}}, ExpireAt, _), Now) when is_pid(Pid) ->
     %% for gen_server:call, it is aborted after timeout, there is no need to send
     %% reply to the caller
     Now > ExpireAt orelse (not erlang:is_process_alive(Pid));
-is_sent_req_expired(?SENT_REQ(_, _, _), _) ->
+is_sent_req_expired(?SENT_REQ({async, _Callback}, _, _), _) ->
     %% for async requests, there is no way to tell if the caller
     %% the provided result-callback should be evaluated or not,
     %% to be on the safe side, we never consider sent async-requests expired.
@@ -718,11 +731,8 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
     end.
 
 %% For async-request, we evaluate the result-callback with {error, timeout}
-maybe_reply_timeout({F, A}) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [{error, timeout}]),
-    ok;
-maybe_reply_timeout(#{final_reply := {F, A}}) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [{error, timeout}]),
+maybe_reply_timeout({async, Callback}) ->
+    reply_async(Callback, {error, timeout}, final_reply),
     ok;
 maybe_reply_timeout(_) ->
     %% This is not a callback, but the gen_server:call's From
@@ -731,6 +741,7 @@ maybe_reply_timeout(_) ->
     ok.
 
 %% enqueue the pending requests
+-spec enqueue_req(reply_target(), term(), #state{}) -> #state{}.
 enqueue_req(ReplyTo, Req, #state{requests = Requests0} = State) ->
     #{
         pending := Pending,
@@ -740,6 +751,15 @@ enqueue_req(ReplyTo, Req, #state{requests = Requests0} = State) ->
     NewPending = InFun(?PEND_REQ(ReplyTo, Req), Pending),
     Requests = Requests0#{pending := NewPending, pending_count := PC + 1},
     State#state{requests = drop_expired(Requests)}.
+
+enqueue_async_req(Callback0, Req, State0) ->
+    case normalize_callback(Callback0) of
+        {ok, Callback} ->
+            enqueue_req({async, Callback}, Req, State0);
+        {error, Reason} ->
+            log_invalid_callback(Reason),
+            State0
+    end.
 
 %% call gun to shoot the request out
 maybe_shoot(
@@ -952,12 +972,12 @@ gun_await_up(Pid, ExpireAt, Timeout, State0) ->
             {{error, Reason}, State0};
         ?ASYNC_REQ(Method, Request, ExpireAt1, ResultCallback) ->
             Req = ?REQ(Method, Request, ExpireAt1),
-            State = enqueue_req(ResultCallback, Req, State0),
+            State = enqueue_async_req(ResultCallback, Req, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
             gun_await_up(Pid, ExpireAt, NewTimeout, State);
         ?GEN_CALL_REQ(From, Call) ->
-            State = enqueue_req(From, Call, State0),
+            State = enqueue_req({sync, From}, Call, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
             gun_await_up(Pid, ExpireAt, NewTimeout, State)
@@ -983,12 +1003,12 @@ gun_await_tunnel(Pid, StreamRef, ExpireAt, Timeout, Headers, State0) ->
             {{error, {proxy_error, {StatusCode, Headers}}}, State0};
         ?ASYNC_REQ(Method, Request, ExpireAt1, ResultCallback) ->
             Req = ?REQ(Method, Request, ExpireAt1),
-            State = enqueue_req(ResultCallback, Req, State0),
+            State = enqueue_async_req(ResultCallback, Req, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
             gun_await_tunnel(Pid, StreamRef, ExpireAt, NewTimeout, Headers, State);
         ?GEN_CALL_REQ(From, Call) ->
-            State = enqueue_req(From, Call, State0),
+            State = enqueue_req({sync, From}, Call, State0),
             %% keep waiting
             NewTimeout = timeout(ExpireAt),
             gun_await_tunnel(Pid, StreamRef, ExpireAt, NewTimeout, Headers, State)
@@ -1042,21 +1062,83 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             end
     end.
 
-reply({F, A}, Result) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [Result]),
+reply({sync, From}, Result) ->
+    gen_server:reply(From, Result);
+reply({async, Callback}, Result) ->
+    reply_async(Callback, Result, final_reply),
     ok;
-reply(#{final_reply := FinalReply}, Result) ->
-    %% assert
-    {F, A} = FinalReply,
-    _ = erlang:apply(F, A ++ [Result]),
-    ok;
-reply(From, Result) ->
-    gen_server:reply(From, Result).
+reply(_InvalidReplyTarget, _Result) ->
+    log_invalid_callback_target(),
+    ok.
 
-maybe_send_stream_ref(#{stream_ref := {F, A}}, StreamRef) when is_function(F) ->
-    _ = erlang:apply(F, [StreamRef, self() | A]),
+maybe_send_stream_ref({async, #{stream_ref := {F, A}}}, StreamRef) ->
+    safe_apply(stream_ref, F, [StreamRef, self() | A]),
     ok;
-maybe_send_stream_ref(_ReplyTo, _StreamRef) ->
+maybe_send_stream_ref(_, _) ->
+    ok.
+
+reply_async(#{final_reply := {F, A}}, Result, Kind) ->
+    safe_apply(Kind, F, A ++ [Result]);
+reply_async(_Callback, _Result, _Kind) ->
+    log_invalid_callback_target().
+
+safe_apply(Kind, F, Args) ->
+    try erlang:apply(F, Args) of
+        _ ->
+            ok
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error(#{
+                msg => "ehttpc_callback_failed",
+                callback_kind => Kind,
+                callback => callback_info(F),
+                class => Class,
+                reason_kind => callback_reason_kind(Class, Reason),
+                stacktrace => callback_stacktrace(Stacktrace)
+            }),
+            ok
+    end.
+
+callback_info(F) when is_function(F) ->
+    Info = erlang:fun_info(F),
+    #{
+        module => proplists:get_value(module, Info),
+        name => proplists:get_value(name, Info),
+        arity => proplists:get_value(arity, Info)
+    };
+callback_info(_) ->
+    #{}.
+
+callback_reason_kind(error, {case_clause, _}) ->
+    case_clause;
+callback_reason_kind(error, {badmatch, _}) ->
+    badmatch;
+callback_reason_kind(error, function_clause) ->
+    function_clause;
+callback_reason_kind(error, {badarity, _}) ->
+    badarity;
+callback_reason_kind(error, undef) ->
+    undef;
+callback_reason_kind(exit, _) ->
+    exit;
+callback_reason_kind(throw, _) ->
+    throw;
+callback_reason_kind(_, _) ->
+    other.
+
+callback_stacktrace([{M, F, A, _Info} | _]) when is_integer(A) ->
+    [{M, F, A}];
+callback_stacktrace([{M, F, Args, _Info} | _]) when is_list(Args) ->
+    [{M, F, length(Args)}];
+callback_stacktrace(_) ->
+    [].
+
+log_invalid_callback(Reason) ->
+    logger:error(#{msg => "ehttpc_invalid_callback", reason => Reason}),
+    ok.
+
+log_invalid_callback_target() ->
+    logger:error(#{msg => "ehttpc_invalid_callback_target"}),
     ok.
 
 peek_oldest_fn(#{prioritise_latest := true}) ->
@@ -1119,6 +1201,48 @@ take_proplist(Key, Proplist0) ->
         {Key, ValueFromProplist} ->
             {ValueFromProplist, Proplist1}
     end.
+
+normalize_callback({F, A}) ->
+    case normalize_callback_fun({F, A}, 1) of
+        {ok, FinalReply} ->
+            {ok, #{final_reply => FinalReply}};
+        {error, _} = Error ->
+            Error
+    end;
+normalize_callback(#{final_reply := FinalReply} = Callback) ->
+    case normalize_callback_fun(FinalReply, 1) of
+        {ok, NormalizedFinalReply} ->
+            normalize_stream_ref_callback(Callback, NormalizedFinalReply);
+        {error, _} = Error ->
+            Error
+    end;
+normalize_callback(_) ->
+    {error, invalid_callback}.
+
+normalize_stream_ref_callback(Callback, FinalReply) ->
+    case maps:find(stream_ref, Callback) of
+        error ->
+            {ok, #{final_reply => FinalReply}};
+        {ok, StreamRef} ->
+            case normalize_callback_fun(StreamRef, 2) of
+                {ok, NormalizedStreamRef} ->
+                    {ok, #{final_reply => FinalReply, stream_ref => NormalizedStreamRef}};
+                {error, _} = Error ->
+                    Error
+            end
+    end.
+
+normalize_callback_fun({F, A}, ExtraArity) when is_function(F), is_list(A) ->
+    case is_function(F, length(A) + ExtraArity) of
+        true ->
+            {ok, {F, A}};
+        false ->
+            {error, invalid_callback_arity}
+    end;
+normalize_callback_fun(_, 1) ->
+    {error, invalid_final_reply};
+normalize_callback_fun(_, 2) ->
+    {error, invalid_stream_ref}.
 
 log(Level, Data, #state{host = Host, port = Port}) ->
     logger:log(Level, Data#{host => Host, port => Port}).

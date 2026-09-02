@@ -104,6 +104,141 @@ send_100_test_() ->
         {"oneoff=false", fun() -> ?WITH(ServerOpts2, PoolOpts2, req_async(100)) end}
     ].
 
+callback_crash_does_not_kill_worker_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            Callback =
+                {
+                    fun(_Result) ->
+                        Tester ! callback_called,
+                        error(callback_boom)
+                    end,
+                    []
+                },
+            ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback),
+            receive
+                callback_called -> ok
+            after 2_000 ->
+                error(callback_not_called)
+            end,
+            _ = sys:get_state(Worker),
+            ?assert(erlang:is_process_alive(Worker)),
+            ?assertMatch({ok, 200, _, _}, ehttpc:request(Worker, get, req(), 1_000, 0))
+        end
+    ).
+
+structured_callback_exception_does_not_kill_worker_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            Callback = #{
+                final_reply =>
+                    {
+                        fun(Result) ->
+                            Tester ! {final_reply, Result},
+                            error(final_reply_callback_boom)
+                        end,
+                        []
+                    },
+                stream_ref =>
+                    {
+                        fun(_StreamRef, _Worker) ->
+                            Tester ! stream_ref_called,
+                            error(stream_ref_callback_boom)
+                        end,
+                        []
+                    }
+            },
+            ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback),
+            receive
+                stream_ref_called -> ok
+            after 2_000 ->
+                error(stream_ref_callback_not_called)
+            end,
+            receive
+                {final_reply, {ok, 200, _, _}} -> ok
+            after 2_000 ->
+                error(final_reply_not_called)
+            end,
+            _ = sys:get_state(Worker),
+            ?assertMatch({ok, 200, _, _}, ehttpc:request(Worker, get, req(), 1_000, 0))
+        end
+    ).
+
+invalid_callback_does_not_kill_worker_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            ?assertError(
+                {invalid_callback, invalid_callback},
+                ehttpc:request_async(Worker, get, req(), 1_000, #{
+                    stream_ref => {fun() -> ok end, []}
+                })
+            ),
+            _ = sys:get_state(Worker),
+            ?assertEqual(1, length(ehttpc:workers(?POOL))),
+            ?assertMatch({ok, 200, _, _}, ehttpc:request(Worker, get, req(), 1_000, 0))
+        end
+    ).
+
+repeated_callback_exceptions_do_not_restart_worker_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            lists:foreach(
+                fun(I) ->
+                    Callback =
+                        {
+                            fun(_Result) ->
+                                Tester ! {callback_called, I},
+                                error(callback_boom)
+                            end,
+                            []
+                        },
+                    ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback)
+                end,
+                lists:seq(1, 20)
+            ),
+            lists:foreach(
+                fun(I) ->
+                    receive
+                        {callback_called, I} -> ok
+                    after 2_000 ->
+                        error({callback_not_called, I})
+                    end
+                end,
+                lists:seq(1, 20)
+            ),
+            _ = sys:get_state(Worker),
+            ?assertEqual([{{?POOL, 1}, Worker}], ehttpc:workers(?POOL)),
+            ?assertEqual(ok, ehttpc:check_pool_integrity(?POOL))
+        end
+    ).
+
 send_1000_async_pipeline_test_() ->
     TestTimeout = 30,
     Port = ?PORT,
