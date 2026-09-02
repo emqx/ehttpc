@@ -116,15 +116,15 @@ callback_crash_does_not_kill_worker_test() ->
             Tester = self(),
             Callback =
                 {
-                    fun(_Result) ->
-                        Tester ! callback_called,
+                    fun(Marker, _Result) ->
+                        Tester ! {callback_called, Marker},
                         error(callback_boom)
                     end,
-                    []
+                    [legacy_marker]
                 },
             ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback),
             receive
-                callback_called -> ok
+                {callback_called, legacy_marker} -> ok
             after 2_000 ->
                 error(callback_not_called)
             end,
@@ -147,29 +147,29 @@ structured_callback_exception_does_not_kill_worker_test() ->
             Callback = #{
                 final_reply =>
                     {
-                        fun(Result) ->
-                            Tester ! {final_reply, Result},
+                        fun(Marker, Result) ->
+                            Tester ! {final_reply, Marker, Result},
                             error(final_reply_callback_boom)
                         end,
-                        []
+                        [final_marker]
                     },
                 stream_ref =>
                     {
-                        fun(_StreamRef, _Worker) ->
-                            Tester ! stream_ref_called,
+                        fun(StreamRef, WorkerPid, Marker) ->
+                            Tester ! {stream_ref_called, StreamRef, WorkerPid, Marker},
                             error(stream_ref_callback_boom)
                         end,
-                        []
+                        [stream_marker]
                     }
             },
             ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback),
             receive
-                stream_ref_called -> ok
+                {stream_ref_called, _, Worker, stream_marker} -> ok
             after 2_000 ->
                 error(stream_ref_callback_not_called)
             end,
             receive
-                {final_reply, {ok, 200, _, _}} -> ok
+                {final_reply, final_marker, {ok, 200, _, _}} -> ok
             after 2_000 ->
                 error(final_reply_not_called)
             end,
@@ -192,6 +192,10 @@ invalid_callback_does_not_kill_worker_test() ->
                 ehttpc:request_async(Worker, get, req(), 1_000, #{
                     stream_ref => {fun() -> ok end, []}
                 })
+            ),
+            ?assertError(
+                {invalid_callback, invalid_callback},
+                ehttpc:request_async(Worker, get, req(), 1_000, {self(), make_ref()})
             ),
             _ = sys:get_state(Worker),
             ?assertEqual(1, length(ehttpc:workers(?POOL))),
