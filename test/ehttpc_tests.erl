@@ -197,8 +197,45 @@ invalid_callback_does_not_kill_worker_test() ->
                 {invalid_callback, invalid_callback},
                 ehttpc:request_async(Worker, get, req(), 1_000, {self(), make_ref()})
             ),
+            ?assertError(
+                {invalid_callback, {invalid_callback_arity, final_reply, 1}},
+                ehttpc:request_async(Worker, get, req(), 1_000, {fun() -> ok end, []})
+            ),
+            ?assertError(
+                {invalid_callback, {invalid_callback_arity, stream_ref, 2}},
+                ehttpc:request_async(Worker, get, req(), 1_000, #{
+                    final_reply => {fun(_) -> ok end, []},
+                    stream_ref => {fun() -> ok end, []}
+                })
+            ),
             _ = sys:get_state(Worker),
             ?assertEqual(1, length(ehttpc:workers(?POOL))),
+            ?assertMatch({ok, 200, _, _}, ehttpc:request(Worker, get, req(), 1_000, 0))
+        end
+    ).
+
+invalid_optional_stream_ref_is_ignored_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            Callback = #{
+                final_reply =>
+                    {fun(Result) -> Tester ! {final_reply, Result} end, []},
+                stream_ref => undefined
+            },
+            ok = ehttpc:request_async(Worker, get, req(), 1_000, Callback),
+            receive
+                {final_reply, {ok, 200, _, _}} -> ok
+            after 2_000 ->
+                error(final_reply_not_called)
+            end,
+            _ = sys:get_state(Worker),
             ?assertMatch({ok, 200, _, _}, ehttpc:request(Worker, get, req(), 1_000, 0))
         end
     ).

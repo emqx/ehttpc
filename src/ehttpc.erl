@@ -1181,13 +1181,33 @@ take_proplist(Key, Proplist0) ->
     end.
 
 validate_callback({F, A}) when is_function(F), is_list(A) ->
-    ok;
-validate_callback(#{final_reply := {F, A}}) when
+    validate_callback_arity(final_reply, F, length(A) + 1);
+validate_callback(#{final_reply := {F, A}} = Callback) when
     is_function(F), is_list(A)
 ->
-    ok;
+    case validate_callback_arity(final_reply, F, length(A) + 1) of
+        ok ->
+            validate_stream_ref_callback(Callback);
+        Error ->
+            Error
+    end;
 validate_callback(_) ->
     {error, invalid_callback}.
+
+validate_stream_ref_callback(#{stream_ref := {F, A}}) when
+    is_function(F), is_list(A)
+->
+    validate_callback_arity(stream_ref, F, length(A) + 2);
+validate_stream_ref_callback(_) ->
+    ok.
+
+validate_callback_arity(Kind, F, ExpectedArity) ->
+    case is_function(F, ExpectedArity) of
+        true ->
+            ok;
+        false ->
+            {error, {invalid_callback_arity, Kind, ExpectedArity}}
+    end.
 
 log(Level, Data, #state{host = Host, port = Port}) ->
     logger:log(Level, Data#{host => Host, port => Port}).
