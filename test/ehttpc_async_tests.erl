@@ -45,6 +45,45 @@ send_10_async_test() ->
     PoolOpts = pool_opts(Port, false),
     true = ?WITH(ServerOpts, PoolOpts, req_async(10, 1000)).
 
+timeout_callback_exception_does_not_kill_worker_test() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 3_000, oneoff => false},
+    PoolOpts = pool_opts(Port, false),
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Tester = self(),
+            ok = ehttpc:request_async(Worker, get, req(), 5_000, {fun(_) -> ok end, []}),
+            %% Ensure the first request occupies the only in-flight slot.
+            _ = sys:get_state(Worker),
+            ok = ehttpc:request_async(
+                Worker,
+                get,
+                req(),
+                10,
+                {
+                    fun(Result) ->
+                        Tester ! {timeout_callback, Result},
+                        error(timeout_callback_boom)
+                    end,
+                    []
+                }
+            ),
+            timer:sleep(30),
+            ok = ehttpc:request_async(Worker, get, req(), 1_000, {fun(_) -> ok end, []}),
+            receive
+                {timeout_callback, {error, timeout}} -> ok
+            after 2_000 ->
+                error(timeout_callback_not_called)
+            end,
+            _ = sys:get_state(Worker),
+            ?assert(erlang:is_process_alive(Worker)),
+            ?assertEqual(1, length(ehttpc:workers(?POOL)))
+        end
+    ).
+
 no_expired_req_send_test() ->
     Port = ?PORT,
     % infinity

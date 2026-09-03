@@ -65,14 +65,15 @@
 -type path() :: binary() | string().
 -type headers() :: [{binary(), iodata()}].
 -type body() :: iodata().
+-type callback_fun() :: {function(), [term()]}.
 -type callback() ::
-    {function(), list()}
+    callback_fun()
     | #{
         %% where to send the final results
-        final_reply := {function(), list()},
+        final_reply := callback_fun(),
         %% optional; sends the gun stream ref and the worker pid so the caller may cancel
         %% it.
-        stream_ref => {function(), list()}
+        stream_ref => callback_fun()
     }.
 -type request() :: path() | {path(), headers()} | {path(), headers(), body()}.
 
@@ -226,9 +227,14 @@ mk_request(delete = Method, Req, ExpireAt) when ?IS_HEADERS_REQ(Req) ->
 %% response is received.
 -spec request_async(pid(), method(), request(), timeout(), callback()) -> ok.
 request_async(Worker, Method, Request, Timeout, ResultCallback) when is_pid(Worker) ->
-    ExpireAt = fresh_expire_at(Timeout),
-    _ = erlang:send(Worker, mk_async_request(Method, Request, ExpireAt, ResultCallback)),
-    ok.
+    case validate_callback(ResultCallback) of
+        ok ->
+            ExpireAt = fresh_expire_at(Timeout),
+            _ = erlang:send(Worker, mk_async_request(Method, Request, ExpireAt, ResultCallback)),
+            ok;
+        {error, Reason} ->
+            error({invalid_callback, Reason})
+    end.
 
 mk_async_request(head = Method, Req, ExpireAt, RC) when ?IS_HEADERS_REQ(Req) ->
     ?ASYNC_REQ(Method, Req, ExpireAt, RC);
@@ -718,11 +724,11 @@ drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
     end.
 
 %% For async-request, we evaluate the result-callback with {error, timeout}
-maybe_reply_timeout({F, A}) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [{error, timeout}]),
+maybe_reply_timeout({F, A}) when is_function(F), is_list(A) ->
+    safe_apply(final_reply, F, A ++ [{error, timeout}]),
     ok;
-maybe_reply_timeout(#{final_reply := {F, A}}) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [{error, timeout}]),
+maybe_reply_timeout(#{final_reply := {F, A}}) when is_function(F), is_list(A) ->
+    safe_apply(final_reply, F, A ++ [{error, timeout}]),
     ok;
 maybe_reply_timeout(_) ->
     %% This is not a callback, but the gen_server:call's From
@@ -1042,21 +1048,75 @@ handle_gun_reply(State, Client, StreamRef, IsFin, StatusCode, Headers, Data) ->
             end
     end.
 
-reply({F, A}, Result) when is_function(F) ->
-    _ = erlang:apply(F, A ++ [Result]),
-    ok;
-reply(#{final_reply := FinalReply}, Result) ->
-    %% assert
-    {F, A} = FinalReply,
-    _ = erlang:apply(F, A ++ [Result]),
-    ok;
-reply(From, Result) ->
-    gen_server:reply(From, Result).
+reply({F, A}, Result) when is_function(F), is_list(A) ->
+    safe_apply(final_reply, F, A ++ [Result]);
+reply(#{final_reply := {F, A}}, Result) when is_function(F), is_list(A) ->
+    safe_apply(final_reply, F, A ++ [Result]);
+reply({Pid, _Tag} = From, Result) when is_pid(Pid) ->
+    gen_server:reply(From, Result);
+reply(_InvalidReplyTarget, _Result) ->
+    log_invalid_callback_target(),
+    ok.
 
-maybe_send_stream_ref(#{stream_ref := {F, A}}, StreamRef) when is_function(F) ->
-    _ = erlang:apply(F, [StreamRef, self() | A]),
+maybe_send_stream_ref(#{stream_ref := {F, A}}, StreamRef) when
+    is_function(F), is_list(A)
+->
+    safe_apply(stream_ref, F, [StreamRef, self() | A]),
     ok;
-maybe_send_stream_ref(_ReplyTo, _StreamRef) ->
+maybe_send_stream_ref(_, _) ->
+    ok.
+
+safe_apply(Kind, F, Args) ->
+    try erlang:apply(F, Args) of
+        _ ->
+            ok
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error(#{
+                msg => "ehttpc_callback_failed",
+                callback_kind => Kind,
+                callback => callback_info(F),
+                class => Class,
+                reason_kind => callback_reason_kind(Class, Reason),
+                stacktrace => callback_stacktrace(Stacktrace)
+            }),
+            ok
+    end.
+
+callback_info(F) when is_function(F) ->
+    Info = erlang:fun_info(F),
+    #{
+        module => proplists:get_value(module, Info),
+        name => proplists:get_value(name, Info),
+        arity => proplists:get_value(arity, Info)
+    }.
+
+callback_reason_kind(error, {case_clause, _}) ->
+    case_clause;
+callback_reason_kind(error, {badmatch, _}) ->
+    badmatch;
+callback_reason_kind(error, function_clause) ->
+    function_clause;
+callback_reason_kind(error, {badarity, _}) ->
+    badarity;
+callback_reason_kind(error, undef) ->
+    undef;
+callback_reason_kind(exit, _) ->
+    exit;
+callback_reason_kind(throw, _) ->
+    throw;
+callback_reason_kind(_, _) ->
+    other.
+
+callback_stacktrace([{M, F, A, _Info} | _]) when is_integer(A) ->
+    [{M, F, A}];
+callback_stacktrace([{M, F, Args, _Info} | _]) when is_list(Args) ->
+    [{M, F, length(Args)}];
+callback_stacktrace(_) ->
+    [].
+
+log_invalid_callback_target() ->
+    logger:error(#{msg => "ehttpc_invalid_callback_target"}),
     ok.
 
 peek_oldest_fn(#{prioritise_latest := true}) ->
@@ -1118,6 +1178,35 @@ take_proplist(Key, Proplist0) ->
             error;
         {Key, ValueFromProplist} ->
             {ValueFromProplist, Proplist1}
+    end.
+
+validate_callback({F, A}) when is_function(F), is_list(A) ->
+    validate_callback_arity(final_reply, F, length(A) + 1);
+validate_callback(#{final_reply := {F, A}} = Callback) when
+    is_function(F), is_list(A)
+->
+    case validate_callback_arity(final_reply, F, length(A) + 1) of
+        ok ->
+            validate_stream_ref_callback(Callback);
+        Error ->
+            Error
+    end;
+validate_callback(_) ->
+    {error, invalid_callback}.
+
+validate_stream_ref_callback(#{stream_ref := {F, A}}) when
+    is_function(F), is_list(A)
+->
+    validate_callback_arity(stream_ref, F, length(A) + 2);
+validate_stream_ref_callback(_) ->
+    ok.
+
+validate_callback_arity(Kind, F, ExpectedArity) ->
+    case is_function(F, ExpectedArity) of
+        true ->
+            ok;
+        false ->
+            {error, {invalid_callback_arity, Kind, ExpectedArity}}
     end.
 
 log(Level, Data, #state{host = Host, port = Port}) ->
