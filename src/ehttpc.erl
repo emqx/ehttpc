@@ -616,10 +616,21 @@ cancel_stream(nofin, Client, StreamRef) ->
     _ = gun:cancel(Client, StreamRef),
     ok.
 
-timeout(infinity = _ExpireAt) ->
+%% ExpireAt is {CalledAt, Timeout}: the caller's timestamp and its request timeout.
+timeout({_CalledAt, infinity}) ->
     infinity;
 timeout(ExpireAt) ->
-    max(ExpireAt - now_(), 0).
+    max(deadline(ExpireAt) - now_(), 0).
+
+deadline({_CalledAt, infinity}) ->
+    infinity;
+deadline({CalledAt, Timeout}) ->
+    CalledAt + Timeout.
+
+is_expired({_CalledAt, infinity}, _Now) ->
+    false;
+is_expired(ExpireAt, Now) ->
+    Now > deadline(ExpireAt).
 
 now_() ->
     erlang:system_time(millisecond).
@@ -636,10 +647,10 @@ put_sent_req(
         max_sent_expire := T
     } = Requests
 ) ->
-    ?SENT_REQ(_, Expire, _) = Req,
+    ?SENT_REQ(_, ExpireAt, _) = Req,
     Requests#{
         sent := maps:put(StreamRef, Req, Sent),
-        max_sent_expire := max_expire(T, Expire)
+        max_sent_expire := max_expire(T, deadline(ExpireAt))
     }.
 
 %% if a request has infinity timeout, ignore it
@@ -670,12 +681,12 @@ take_sent_req(StreamRef, #{sent := Sent, max_sent_expire := T} = Requests) ->
             end
     end.
 
-is_sent_req_expired(?SENT_REQ(_From, infinity = _ExpireAt, _), _Now) ->
+is_sent_req_expired(?SENT_REQ(_From, {_CalledAt, infinity}, _), _Now) ->
     false;
 is_sent_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) when is_pid(Pid) ->
     %% for gen_server:call, it is aborted after timeout, there is no need to send
     %% reply to the caller
-    Now > ExpireAt orelse (not erlang:is_process_alive(Pid));
+    is_expired(ExpireAt, Now) orelse (not erlang:is_process_alive(Pid));
 is_sent_req_expired(?SENT_REQ(_, _, _), _) ->
     %% for async requests, there is no way to tell if the caller
     %% the provided result-callback should be evaluated or not,
@@ -712,7 +723,7 @@ drop_expired(#{pending_count := 0} = Requests, _Now) ->
 drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
     {PeekFun, OutFun} = peek_oldest_fn(Requests),
     {value, ?PEND_REQ(ReplyTo, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
-    case is_integer(ExpireAt) andalso Now > ExpireAt of
+    case is_expired(ExpireAt, Now) of
         true ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
@@ -1129,10 +1140,8 @@ enqueue_latest_fn(#{prioritise_latest := true}) ->
 enqueue_latest_fn(_) ->
     fun queue:in/2.
 
-fresh_expire_at(infinity = _Timeout) ->
-    infinity;
-fresh_expire_at(Timeout) when is_integer(Timeout) ->
-    now_() + Timeout.
+fresh_expire_at(Timeout) when Timeout =:= infinity; is_integer(Timeout) ->
+    {now_(), Timeout}.
 
 parse_proxy_opts(Opts) ->
     %% Target host and port
