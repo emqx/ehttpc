@@ -92,6 +92,7 @@
 -define(undef, undefined).
 -define(IS_POOL(Pool), (not is_tuple(Pool) andalso not is_pid(Pool))).
 -define(DEFAULT_MAX_INACTIVE, 10_000).
+-define(INACTIVE_CAP, 60_000).
 
 -define(IS_HEADERS_REQ(REQ),
     (tuple_size(REQ) =:= 2 andalso is_list(element(2, REQ)))
@@ -119,6 +120,7 @@
     %% In this case, host and port point to proxy server.
     origin :: undefined | map(),
     max_inactive :: pos_integer(),
+    max_inactive_cap :: pos_integer(),
     inactive_check_tref :: reference() | ?undef
 }).
 
@@ -273,6 +275,7 @@ init([Pool, Id, Opts0]) ->
     PrioLatest = proplists:get_bool(prioritise_latest, Opts0),
     #{opts := Opts, origin := Origin} = parse_proxy_opts(Opts0),
     MaxInactive = proplists:get_value(max_inactive, Opts, ?DEFAULT_MAX_INACTIVE),
+    MaxInactiveCap = proplists:get_value(max_inactive_cap, Opts, ?INACTIVE_CAP),
     State = #state{
         pool = Pool,
         id = Id,
@@ -286,11 +289,13 @@ init([Pool, Id, Opts0]) ->
             pending => queue:new(),
             pending_count => 0,
             sent => #{},
-            max_sent_expire => 0,
+            max_sent_at => 0,
+            max_sent_timeout => 0,
             prioritise_latest => PrioLatest
         },
         origin = Origin,
-        max_inactive = MaxInactive
+        max_inactive = MaxInactive,
+        max_inactive_cap = MaxInactiveCap
     },
     true = gproc_pool:connect_worker(ehttpc:name(Pool), {Pool, Id}),
 
@@ -616,10 +621,21 @@ cancel_stream(nofin, Client, StreamRef) ->
     _ = gun:cancel(Client, StreamRef),
     ok.
 
-timeout(infinity = _ExpireAt) ->
+%% ExpireAt is {CalledAt, Timeout}: the caller's timestamp and its request timeout.
+timeout({_CalledAt, infinity}) ->
     infinity;
 timeout(ExpireAt) ->
-    max(ExpireAt - now_(), 0).
+    max(deadline(ExpireAt) - now_(), 0).
+
+deadline({_CalledAt, infinity}) ->
+    infinity;
+deadline({CalledAt, Timeout}) ->
+    CalledAt + Timeout.
+
+is_expired({_CalledAt, infinity}, _Now) ->
+    false;
+is_expired(ExpireAt, Now) ->
+    Now > deadline(ExpireAt).
 
 now_() ->
     erlang:system_time(millisecond).
@@ -628,25 +644,30 @@ now_() ->
 %% sent requests
 %% =================================================================================
 
+%% max_sent_at is the latest time a request was sent to gun.
+%% max_sent_timeout is the largest request timeout among the sent requests.
+%% Both reset to 0 when no request is in flight.
 put_sent_req(
     StreamRef,
     Req,
     #{
         sent := Sent,
-        max_sent_expire := T
+        max_sent_at := SentAt,
+        max_sent_timeout := MaxTimeout
     } = Requests
 ) ->
-    ?SENT_REQ(_, Expire, _) = Req,
+    ?SENT_REQ(_, {_CalledAt, Timeout}, _) = Req,
     Requests#{
         sent := maps:put(StreamRef, Req, Sent),
-        max_sent_expire := max_expire(T, Expire)
+        max_sent_at := max(SentAt, now_()),
+        max_sent_timeout := max_timeout(MaxTimeout, Timeout)
     }.
 
-%% if a request has infinity timeout, ignore it
-max_expire(T, infinity) -> T;
-max_expire(T1, T2) when is_integer(T2) -> max(T1, T2).
+max_timeout(_, infinity) -> infinity;
+max_timeout(infinity, _) -> infinity;
+max_timeout(T1, T2) -> max(T1, T2).
 
-take_sent_req(StreamRef, #{sent := Sent, max_sent_expire := T} = Requests) ->
+take_sent_req(StreamRef, #{sent := Sent} = Requests) ->
     case maps:take(StreamRef, Sent) of
         error ->
             error;
@@ -655,27 +676,27 @@ take_sent_req(StreamRef, #{sent := Sent, max_sent_expire := T} = Requests) ->
             %% so there is no need to scan the map to find a new max
             %% or even if calls may use different timeout
             %% the impact of a wrong max is minimal: delayed detection of zombie connection
-            NewT =
+            NewRequests =
                 case map_size(NewSent) of
                     0 ->
-                        0;
+                        reset_sent(Requests);
                     _ ->
-                        T
+                        Requests#{sent := NewSent}
                 end,
             case is_sent_req_expired(Req, now_()) of
                 true ->
-                    {expired, Requests#{sent := NewSent, max_sent_expire := NewT}};
+                    {expired, NewRequests};
                 false ->
-                    {Req, Requests#{sent := NewSent, max_sent_expire := NewT}}
+                    {Req, NewRequests}
             end
     end.
 
-is_sent_req_expired(?SENT_REQ(_From, infinity = _ExpireAt, _), _Now) ->
+is_sent_req_expired(?SENT_REQ(_From, {_CalledAt, infinity}, _), _Now) ->
     false;
 is_sent_req_expired(?SENT_REQ({Pid, _Ref}, ExpireAt, _), Now) when is_pid(Pid) ->
     %% for gen_server:call, it is aborted after timeout, there is no need to send
     %% reply to the caller
-    Now > ExpireAt orelse (not erlang:is_process_alive(Pid));
+    is_expired(ExpireAt, Now) orelse (not erlang:is_process_alive(Pid));
 is_sent_req_expired(?SENT_REQ(_, _, _), _) ->
     %% for async requests, there is no way to tell if the caller
     %% the provided result-callback should be evaluated or not,
@@ -698,7 +719,10 @@ reply_error_for_sent_reqs(#{sent := Sent} = R, Reason) ->
         end,
         maps:to_list(Sent)
     ),
-    R#{sent => #{}, max_sent_expire => 0}.
+    reset_sent(R).
+
+reset_sent(Requests) ->
+    Requests#{sent := #{}, max_sent_at := 0, max_sent_timeout := 0}.
 
 %% Continue droping expired requests, to avoid the state RAM usage
 %% explosion if http client can not keep up.
@@ -712,7 +736,7 @@ drop_expired(#{pending_count := 0} = Requests, _Now) ->
 drop_expired(#{pending := Pending, pending_count := PC} = Requests, Now) ->
     {PeekFun, OutFun} = peek_oldest_fn(Requests),
     {value, ?PEND_REQ(ReplyTo, ?REQ(_, _, ExpireAt))} = PeekFun(Pending),
-    case is_integer(ExpireAt) andalso Now > ExpireAt of
+    case is_expired(ExpireAt, Now) of
         true ->
             {_, NewPendings} = OutFun(Pending),
             NewRequests = Requests#{pending => NewPendings, pending_count => PC - 1},
@@ -753,16 +777,19 @@ maybe_shoot(
         requests =
             #{
                 sent := Sent,
-                max_sent_expire := MaxExpire
+                max_sent_at := MaxSentAt,
+                max_sent_timeout := MaxTimeout
             } = Requests0,
         client = Client,
         max_inactive = MaxInactive,
+        max_inactive_cap = MaxInactiveCap,
         enable_pipelining = PipelineLimit
     } = State0
 ) ->
     State = State0#state{requests = drop_expired(Requests0)},
     SentCount = map_size(Sent),
-    case check_gun(Client, PipelineLimit, SentCount, MaxExpire, MaxInactive) of
+    Threshold = inactive_threshold(MaxTimeout, MaxInactive, MaxInactiveCap),
+    case check_gun(Client, PipelineLimit, SentCount, MaxSentAt, Threshold) of
         continue ->
             do_shoot(State);
         pause ->
@@ -772,16 +799,17 @@ maybe_shoot(
             State;
         reconnect ->
             %% assert
-            true = (MaxExpire > 0),
+            true = (MaxSentAt > 0),
             %% the connection has been inactive for too long
             log(
                 error,
                 #{
                     msg => "force_reconnecting_zombie_http_connection",
-                    last_request_expire => calendar:system_time_to_rfc3339(MaxExpire, [
+                    last_request_sent_at => calendar:system_time_to_rfc3339(MaxSentAt, [
                         {unit, millisecond}
                     ]),
-                    inactive_duration_threshold => MaxInactive,
+                    inactive_duration_threshold => Threshold,
+                    max_request_timeout => MaxTimeout,
                     inflight_requests => SentCount,
                     connection_pid => Client,
                     pool => State#state.pool,
@@ -794,10 +822,10 @@ maybe_shoot(
             State
     end.
 
-check_gun(ClientPid, PipelineLimit, SentCount, MaxExpireTs, MaxInactiveDuration) ->
+check_gun(ClientPid, PipelineLimit, SentCount, MaxSentAt, Threshold) ->
     maybe
         ok ?= check_gun_pid(ClientPid),
-        ok ?= check_gun_jammed(SentCount, MaxExpireTs, MaxInactiveDuration),
+        ok ?= check_gun_jammed(SentCount, MaxSentAt, Threshold),
         check_gun_limit(PipelineLimit, SentCount)
     end.
 
@@ -816,18 +844,27 @@ check_gun_pid(Pid) ->
             pause
     end.
 
-%% if there are sent requests, and the last reply is older than max_inactive,
+%% if there are sent requests, and the latest send is older than the threshold,
 %% the connection is considered in zomebie state hence require a reconnect.
-check_gun_jammed(_SentCount, 0, _MaxInactiveDuration) ->
-    %% there was no expire time recorded before
+check_gun_jammed(_SentCount, 0, _Threshold) ->
+    %% no request in flight
     ok;
-check_gun_jammed(_SentCount, MaxExpireTs, MaxInactiveDuration) ->
-    case (now_() - MaxExpireTs) > MaxInactiveDuration of
+check_gun_jammed(_SentCount, MaxSentAt, Threshold) ->
+    case (now_() - MaxSentAt) > Threshold of
         true ->
             reconnect;
         false ->
             ok
     end.
+
+%% How long after the latest send a connection with requests in flight
+%% may stay silent before it is considered a zombie.
+%% It is MaxTimeout + MaxInactive, capped at MaxInactiveCap,
+%% but never less than MaxInactive.
+inactive_threshold(infinity, MaxInactive, MaxInactiveCap) ->
+    max(MaxInactive, MaxInactiveCap);
+inactive_threshold(MaxTimeout, MaxInactive, MaxInactiveCap) ->
+    max(MaxInactive, min(MaxInactiveCap, MaxTimeout + MaxInactive)).
 
 %% allow 100 async requests maximum when enable_pipelining is 'true'
 %% allow only 1 async request when enable_pipelining is 'false'
@@ -1129,10 +1166,8 @@ enqueue_latest_fn(#{prioritise_latest := true}) ->
 enqueue_latest_fn(_) ->
     fun queue:in/2.
 
-fresh_expire_at(infinity = _Timeout) ->
-    infinity;
-fresh_expire_at(Timeout) when is_integer(Timeout) ->
-    now_() + Timeout.
+fresh_expire_at(Timeout) when Timeout =:= infinity; is_integer(Timeout) ->
+    {now_(), Timeout}.
 
 parse_proxy_opts(Opts) ->
     %% Target host and port
@@ -1213,6 +1248,25 @@ log(Level, Data, #state{host = Host, port = Port}) ->
     logger:log(Level, Data#{host => Host, port => Port}).
 
 -ifdef(TEST).
+
+inactive_threshold_test_() ->
+    Cap = ?INACTIVE_CAP,
+    Cases = [
+        %% {MaxTimeout, MaxInactive, Expected}
+        {5_000, 10_000, 15_000},
+        {45_000, 10_000, 55_000},
+        {50_000, 10_000, 60_000},
+        {600_000, 10_000, 60_000},
+        {infinity, 10_000, 60_000},
+        {600_000, 180_000, 180_000},
+        {infinity, 180_000, 180_000},
+        {0, 10_000, 10_000},
+        {0, 60_000, 60_000}
+    ],
+    [
+        ?_assertEqual(Expected, inactive_threshold(MaxTimeout, MaxInactive, Cap))
+     || {MaxTimeout, MaxInactive, Expected} <- Cases
+    ].
 
 prioritise_latest_test() ->
     Opts = #{prioritise_latest => true},

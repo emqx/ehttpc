@@ -1,5 +1,18 @@
 # ehttpc changes
 
+## 0.7.6
+
+- Zombie-connection detection no longer waits for the full request timeout. A connection
+  with requests in flight is reconnected when the latest send is older than
+  `request timeout + max_inactive`, capped at `max_inactive_cap` but never below
+  `max_inactive`. `max_inactive_cap` is a new pool option and defaults to 60 seconds.
+  Previously a 600-second request timeout delayed detection to 610 seconds, and requests
+  with an `infinity` timeout disabled detection entirely.
+- Behaviour change: with a request timeout above about 50 seconds and the default pool
+  options, a connection whose response takes longer than 60 seconds is now killed at
+  60 seconds. Set `max_inactive_cap` or `max_inactive` to the slowest expected response time
+  to raise the bound.
+
 ## 0.7.5
 
 - Added the possibility of choosing HTTP2 as the protocol.
