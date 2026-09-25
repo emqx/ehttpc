@@ -722,7 +722,7 @@ reply_error_for_sent_reqs(#{sent := Sent} = R, Reason) ->
     reset_sent(R).
 
 reset_sent(Requests) ->
-    Requests#{sent => #{}, max_sent_at => 0, max_sent_timeout => 0}.
+    Requests#{sent := #{}, max_sent_at := 0, max_sent_timeout := 0}.
 
 %% Continue droping expired requests, to avoid the state RAM usage
 %% explosion if http client can not keep up.
