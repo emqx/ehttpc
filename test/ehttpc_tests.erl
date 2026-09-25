@@ -651,7 +651,7 @@ zombie_detect_inflight_not_full_test() ->
             %% let the EXIT signal get to ehttpc process
             {ok, _} = ?block_until(#{?snk_kind := handle_client_down}, 1000, infinity),
             #{requests := Requests} = ehttpc:get_state(Pid, normal),
-            #{sent := Sent, pending_count := PendingCount, max_sent_expire := MaxTs} = Requests,
+            #{sent := Sent, pending_count := PendingCount, max_sent_at := MaxTs} = Requests,
             ?assertEqual(0, maps:size(Sent)),
             ?assertEqual(0, PendingCount),
             ?assertEqual(0, MaxTs),
@@ -699,10 +699,41 @@ zombie_detect_inflight_full_test() ->
                 error(timeout)
             end,
             #{requests := Requests} = ehttpc:get_state(Pid, normal),
-            #{sent := Sent, pending_count := PendingCount, max_sent_expire := MaxTs} = Requests,
+            #{sent := Sent, pending_count := PendingCount, max_sent_at := MaxTs} = Requests,
             ?assertEqual(0, maps:size(Sent)),
             ?assertEqual(0, PendingCount),
             ?assertEqual(0, MaxTs),
+            ok
+        end
+    ).
+
+zombie_detect_long_timeout_test() ->
+    zombie_detect_capped(?PORT, ?FUNCTION_NAME, 30_000).
+
+zombie_detect_infinity_timeout_test() ->
+    zombie_detect_capped(?PORT, ?FUNCTION_NAME, infinity).
+
+%% With max_inactive = 1s and max_inactive_cap = 2s, a request timeout
+%% longer than the cap must not delay zombie detection past the cap.
+zombie_detect_capped(Port, Name, Timeout) ->
+    ServerOpts = #{
+        port => Port,
+        name => Name,
+        %% no response during this test
+        delay => 30_000,
+        oneoff => false
+    },
+    PoolOpts0 = pool_opts("127.0.0.1", Port, 5, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1_000}, {max_inactive_cap, 2_000} | PoolOpts0],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            T0 = erlang:monotonic_time(millisecond),
+            spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], "foo"}, Timeout, 0) end),
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 3_500, infinity),
+            Elapsed = erlang:monotonic_time(millisecond) - T0,
+            ?assert(Elapsed >= 2_000),
             ok
         end
     ).
