@@ -531,6 +531,37 @@ zombie_detect_inflight_full_test() ->
         end
     ).
 
+zombie_detect_long_timeout_test() ->
+    zombie_detect_capped(?PORT, ?FUNCTION_NAME, 30_000).
+
+zombie_detect_infinity_timeout_test() ->
+    zombie_detect_capped(?PORT, ?FUNCTION_NAME, infinity).
+
+%% With max_inactive = 1s and the inactive cap at 2s in the TEST build,
+%% a request timeout longer than the cap must not delay zombie detection past the cap.
+zombie_detect_capped(Port, Name, Timeout) ->
+    ServerOpts = #{
+        port => Port,
+        name => Name,
+        %% no response during this test
+        delay => 30_000,
+        oneoff => false
+    },
+    PoolOpts0 = pool_opts("127.0.0.1", Port, 5, _PrioritiseLatest = false),
+    PoolOpts = [{max_inactive, 1_000} | PoolOpts0],
+    ?WITH(
+        ServerOpts,
+        PoolOpts,
+        begin
+            T0 = erlang:monotonic_time(millisecond),
+            spawn_link(fun() -> ehttpc:request(?POOL, put, {<<"/">>, [], "foo"}, Timeout, 0) end),
+            {ok, _} = ?block_until(#{?snk_kind := reconnect}, 3_500, infinity),
+            Elapsed = erlang:monotonic_time(millisecond) - T0,
+            ?assert(Elapsed >= 2_000),
+            ok
+        end
+    ).
+
 head_request_test() ->
     Port = ?PORT,
     Host = "127.0.0.1",

@@ -82,6 +82,13 @@
 -define(undef, undefined).
 -define(IS_POOL(Pool), (not is_tuple(Pool) andalso not is_pid(Pool))).
 -define(DEFAULT_MAX_INACTIVE, 10_000).
+-ifdef(TEST).
+-define(INACTIVE_CAP, 2_000).
+-else.
+-define(INACTIVE_CAP, 60_000).
+-endif.
+%% Process dictionary key for the time of the latest request sent to gun.
+-define(LAST_SENT_TS, last_sent_ts).
 
 -define(IS_HEADERS_REQ(REQ),
     (tuple_size(REQ) =:= 2 andalso is_list(element(2, REQ)))
@@ -610,6 +617,7 @@ put_sent_req(
     } = Requests
 ) ->
     ?SENT_REQ(_, Expire, _) = Req,
+    _ = put(?LAST_SENT_TS, now_()),
     Requests#{
         sent := maps:put(StreamRef, Req, Sent),
         max_sent_expire := max_expire(T, Expire)
@@ -741,17 +749,15 @@ maybe_shoot(
             ?tp(cool_down, #{enable_pipelining => State#state.enable_pipelining}),
             State;
         reconnect ->
-            %% assert
-            true = (MaxExpire > 0),
             %% the connection has been inactive for too long
             log(
                 error,
                 #{
                     msg => "force_reconnecting_zombie_http_connection",
-                    last_request_expire => calendar:system_time_to_rfc3339(MaxExpire, [
-                        {unit, millisecond}
-                    ]),
+                    last_request_expire => format_ts(MaxExpire),
+                    last_request_sent_at => format_ts(get(?LAST_SENT_TS)),
                     inactive_duration_threshold => MaxInactive,
+                    inactive_duration_cap => max(MaxInactive, ?INACTIVE_CAP),
                     inflight_requests => SentCount,
                     connection_pid => Client,
                     pool => State#state.pool,
@@ -786,12 +792,38 @@ check_gun_pid(Pid) ->
             pause
     end.
 
-%% if there are sent requests, and the last reply is older than max_inactive,
-%% the connection is considered in zomebie state hence require a reconnect.
-check_gun_jammed(_SentCount, 0, _MaxInactiveDuration) ->
+format_ts(Ts) when is_integer(Ts), Ts > 0 ->
+    calendar:system_time_to_rfc3339(Ts, [{unit, millisecond}]);
+format_ts(_) ->
+    undefined.
+
+%% if there are sent requests, and the latest send is older than
+%% max(max_inactive, ?INACTIVE_CAP), or the latest request expiry is older than
+%% max_inactive, the connection is considered in zombie state hence require a reconnect.
+%% When no send time is recorded in the process dictionary, only the expiry is checked.
+check_gun_jammed(SentCount, MaxExpireTs, MaxInactiveDuration) ->
+    case get(?LAST_SENT_TS) of
+        LastSentTs when is_integer(LastSentTs) ->
+            check_gun_jammed(SentCount, MaxExpireTs, LastSentTs, MaxInactiveDuration);
+        _ ->
+            check_gun_jammed_expire(MaxExpireTs, MaxInactiveDuration)
+    end.
+
+check_gun_jammed(0, _MaxExpireTs, _LastSentTs, _MaxInactiveDuration) ->
+    %% no request in flight
+    ok;
+check_gun_jammed(_SentCount, MaxExpireTs, LastSentTs, MaxInactiveDuration) ->
+    case (now_() - LastSentTs) > max(MaxInactiveDuration, ?INACTIVE_CAP) of
+        true ->
+            reconnect;
+        false ->
+            check_gun_jammed_expire(MaxExpireTs, MaxInactiveDuration)
+    end.
+
+check_gun_jammed_expire(0, _MaxInactiveDuration) ->
     %% there was no expire time recorded before
     ok;
-check_gun_jammed(_SentCount, MaxExpireTs, MaxInactiveDuration) ->
+check_gun_jammed_expire(MaxExpireTs, MaxInactiveDuration) ->
     case (now_() - MaxExpireTs) > MaxInactiveDuration of
         true ->
             reconnect;

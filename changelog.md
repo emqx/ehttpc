@@ -1,5 +1,17 @@
 # ehttpc changes
 
+## 0.7.3.1
+
+- Zombie-connection detection no longer waits for the full request timeout. A connection
+  with requests in flight is also reconnected when the latest send is older than
+  `max(max_inactive, 60 seconds)`. Previously a 600-second request timeout delayed detection
+  to 610 seconds, and requests with an `infinity` timeout disabled detection entirely.
+- Behaviour change: a connection whose response takes longer than 60 seconds is now killed
+  at 60 seconds. Set the `max_inactive` pool option to the slowest expected response time to
+  raise the bound.
+- The change keeps the worker state and message formats, so it can be applied by loading
+  the new `ehttpc` module into a running node.
+
 ## 0.7.3
 
 - Previously, we had a fixed restart intensity for the worker supervisor, meaning that if a
