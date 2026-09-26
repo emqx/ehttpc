@@ -859,6 +859,37 @@ hash_pool_test() ->
     end,
     ?WITH(ServerOpts1, PoolOpts1, Send()).
 
+tcp_keepalive_test_() ->
+    Port = ?PORT,
+    ServerOpts = #{port => Port, name => ?FUNCTION_NAME, delay => 0},
+    PoolOpts = [{keepalive, 30_000} | pool_opts(Port, false)],
+    TCPPoolOpts = [{transport, tcp}, {transport_opts, [{nodelay, true}]} | PoolOpts],
+    Check = fun() ->
+        ?assertMatch({ok, 200, _, _}, ehttpc:request(?POOL, get, req(), 1000, 0)),
+        {_, #{client := Client}} = ehttpc:get_state(?POOL),
+        #{socket := Socket} = gun:info(Client),
+        ?assertEqual({ok, [{keepalive, true}]}, inet:getopts(Socket, [keepalive])),
+        assert_tcp_keepalive_timers(Socket, os:type())
+    end,
+    [
+        {"no transport_opts", fun() -> ?WITH(ServerOpts, PoolOpts, Check()) end},
+        {"tcp transport_opts", fun() -> ?WITH(ServerOpts, TCPPoolOpts, Check()) end}
+    ].
+
+%% Idle time, probe interval and probe count, in this order.
+assert_tcp_keepalive_timers(Socket, {unix, linux}) ->
+    assert_raw_tcp_opts(Socket, [{4, 30}, {5, 5}, {6, 3}]);
+assert_tcp_keepalive_timers(Socket, {unix, darwin}) ->
+    assert_raw_tcp_opts(Socket, [{16#10, 30}, {16#101, 5}, {16#102, 3}]);
+assert_tcp_keepalive_timers(_Socket, _OS) ->
+    ok.
+
+assert_raw_tcp_opts(Socket, Expected) ->
+    ?assertEqual(
+        {ok, [{raw, 6, Opt, <<Value:32/native>>} || {Opt, Value} <- Expected]},
+        inet:getopts(Socket, [{raw, 6, Opt, 4} || {Opt, _} <- Expected])
+    ).
+
 with_server(Port, Name, Delay, F) ->
     ehttpc_test_lib:with_server(Port, Name, Delay, F).
 

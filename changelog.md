@@ -1,5 +1,17 @@
 # ehttpc changes
 
+## Unreleased
+
+- Added TCP keepalive for the `keepalive` pool option, which used to be ignored.  On Linux
+  and macOS, probes start after `keepalive` milliseconds of idle time, rounded down to whole
+  seconds and kept between 1 and 32767 seconds.  They are sent every 5 seconds, and the
+  connection is closed after 3 unanswered probes.  Other systems only enable `SO_KEEPALIVE`
+  and use the OS timers.  `{keepalive, false}` in `transport_opts` turns it off, and any
+  other keepalive option set there replaces the matching one.
+- Fixed `keepidle`, `keepintvl` and `keepcnt` (OTP 28 and later) in `transport_opts` being
+  dropped for `tcp` and passed to the TLS options for `tls`.  They now go to `gen_tcp`.
+  `keepidle` is Linux only, and on macOS a connection that sets it fails.
+
 ## 0.7.5
 
 - Added the possibility of choosing HTTP2 as the protocol.
