@@ -8,9 +8,10 @@
   connection is closed after 3 unanswered probes.  Other systems only enable `SO_KEEPALIVE`
   and use the OS timers.  `{keepalive, false}` in `transport_opts` turns it off, and any
   other keepalive option set there replaces the matching one.
-- Fixed `keepidle`, `keepintvl` and `keepcnt` (OTP 28 and later) in `transport_opts` being
-  dropped for `tcp` and passed to the TLS options for `tls`.  They now go to `gen_tcp`.
-  `keepidle` is Linux only, and on macOS a connection that sets it fails.
+- Fixed `keepidle`, `keepintvl` and `keepcnt` (OTP 28.3 and later) in `transport_opts`
+  being dropped for `tcp` and passed to the TLS options for `tls`.  They now go to
+  `gen_tcp`.  A connection that sets them fails before OTP 28.3, and one that sets
+  `keepidle` fails on macOS.
 
 ## 0.7.6
 

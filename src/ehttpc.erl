@@ -508,7 +508,8 @@ gun_opts(Opts) ->
 %% it off.  Any other keepalive option set in `transport_opts' replaces the
 %% one the `keepalive' option would set.
 with_tcp_keepalive(Timeout, GunOpts) when is_integer(Timeout), Timeout > 0 ->
-    %% gun's default when `tcp_opts' is not set
+    %% gun uses these send timeouts only when `tcp_opts' is not set, and the
+    %% keepalive options are added to `tcp_opts'.
     TCPOpts = maps:get(tcp_opts, GunOpts, [{send_timeout, 15000}, {send_timeout_close, true}]),
     case lists:member({keepalive, false}, TCPOpts) of
         true ->
@@ -526,8 +527,8 @@ with_tcp_keepalive(_Timeout, GunOpts) ->
 
 %% Each option is paired with the name of the native option that sets the
 %% same value.  Probes are sent every 5 seconds, the connection is dropped
-%% after 3 unanswered probes.  Raw options are used because the native
-%% `keepidle' option is only available on Linux, and only since OTP 28.
+%% after 3 unanswered probes.  Raw options are used because the native ones
+%% only exist since OTP 28.3, and native `keepidle' is Linux only.
 %% Linux rejects an idle time above 32767 seconds, and a rejected raw
 %% option is silently ignored.
 tcp_keepalive_opts(OS, Timeout) ->
@@ -621,7 +622,7 @@ is_gen_tcp_option({header, _}) -> ignore;
 is_gen_tcp_option({high_msgq_watermark, _}) -> true;
 is_gen_tcp_option({high_watermark, _}) -> true;
 is_gen_tcp_option({keepalive, _}) -> true;
-%% OTP 28 and later, keepidle is Linux only
+%% OTP 28.3 and later, keepidle is Linux only
 is_gen_tcp_option({keepcnt, _}) -> true;
 is_gen_tcp_option({keepidle, _}) -> true;
 is_gen_tcp_option({keepintvl, _}) -> true;
