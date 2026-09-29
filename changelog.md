@@ -1,6 +1,6 @@
 # ehttpc changes
 
-## Unreleased
+## 0.7.7
 
 - Added TCP keepalive for the `keepalive` pool option, which used to be ignored.  On Linux
   and macOS, probes start after `keepalive` milliseconds of idle time, rounded down to whole
