@@ -526,14 +526,14 @@ with_tcp_keepalive(_Timeout, GunOpts) ->
     GunOpts.
 
 %% Each option is paired with the name of the native option that sets the
-%% same value.  Probes are sent every 5 seconds, the connection is dropped
-%% after 3 unanswered probes.  Raw options are used because the native ones
-%% only exist since OTP 28.3, and native `keepidle' is Linux only.
-%% Linux rejects an idle time above 32767 seconds, and a rejected raw
-%% option is silently ignored.
+%% same value.  Probes are sent every 5 seconds, or at the idle time if that
+%% is shorter, and the connection is dropped after 3 unanswered probes.  Raw
+%% options are used because the native ones only exist since OTP 28.3, and
+%% native `keepidle' is Linux only.  Linux rejects an idle time above 32767
+%% seconds, and a rejected raw option is silently ignored.
 tcp_keepalive_opts(OS, Timeout) ->
     Idle = min(32767, max(1, Timeout div 1000)),
-    Interval = 5,
+    Interval = min(Idle, 5),
     Count = 3,
     case OS of
         {unix, linux} ->
@@ -1354,7 +1354,7 @@ prioritise_oldest_test() ->
     ?assertMatch({{value, 1}, _}, queue:out(Q)).
 
 tcp_keepalive_gun_opts_test_() ->
-    KeepaliveOpts = expected_tcp_keepalive_opts(os:type(), 30),
+    KeepaliveOpts = expected_tcp_keepalive_opts(os:type(), 30, 5),
     %% The raw option that sets the idle time, on systems that have one
     IdleRaw = [O || {raw, _, N, _} = O <- KeepaliveOpts, N =:= 4 orelse N =:= 16#10],
     CallerIdleRaw = [{raw, L, N, <<60:32/native>>} || {raw, L, N, _} <- IdleRaw],
@@ -1377,7 +1377,7 @@ tcp_keepalive_gun_opts_test_() ->
             TCPOpts([{keepalive, 30_000}])
         ),
         ?_assertEqual(
-            expected_tcp_keepalive_opts(os:type(), 1) ++ [{nodelay, true}],
+            expected_tcp_keepalive_opts(os:type(), 1, 1) ++ [{nodelay, true}],
             TCPOpts([{keepalive, 500} | TCP])
         ),
         ?_assertEqual([{keepalive, false}], WithTCPOpts([{keepalive, false}])),
@@ -1398,26 +1398,28 @@ tcp_keepalive_gun_opts_test_() ->
 tcp_keepalive_opts_test_() ->
     Opts = fun(OS, Timeout) -> [O || {_Name, O} <- tcp_keepalive_opts(OS, Timeout)] end,
     [
-        ?_assertEqual(expected_tcp_keepalive_opts(OS, Idle), Opts(OS, Timeout))
+        ?_assertEqual(expected_tcp_keepalive_opts(OS, Idle, Interval), Opts(OS, Timeout))
      || OS <- [{unix, linux}, {unix, darwin}, {unix, freebsd}, {win32, nt}],
-        {Timeout, Idle} <- [{30_000, 30}, {40_000_000, 32767}]
+        {Timeout, Idle, Interval} <- [
+            {500, 1, 1}, {3_000, 3, 3}, {30_000, 30, 5}, {40_000_000, 32767, 5}
+        ]
     ].
 
-expected_tcp_keepalive_opts({unix, linux}, Idle) ->
+expected_tcp_keepalive_opts({unix, linux}, Idle, Interval) ->
     [
         {keepalive, true},
         {raw, 6, 4, <<Idle:32/native>>},
-        {raw, 6, 5, <<5:32/native>>},
+        {raw, 6, 5, <<Interval:32/native>>},
         {raw, 6, 6, <<3:32/native>>}
     ];
-expected_tcp_keepalive_opts({unix, darwin}, Idle) ->
+expected_tcp_keepalive_opts({unix, darwin}, Idle, Interval) ->
     [
         {keepalive, true},
         {raw, 6, 16#10, <<Idle:32/native>>},
-        {raw, 6, 16#101, <<5:32/native>>},
+        {raw, 6, 16#101, <<Interval:32/native>>},
         {raw, 6, 16#102, <<3:32/native>>}
     ];
-expected_tcp_keepalive_opts(_OS, _Idle) ->
+expected_tcp_keepalive_opts(_OS, _Idle, _Interval) ->
     [{keepalive, true}].
 
 -endif.

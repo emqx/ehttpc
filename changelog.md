@@ -4,10 +4,11 @@
 
 - Added TCP keepalive for the `keepalive` pool option, which used to be ignored.  On Linux
   and macOS, probes start after `keepalive` milliseconds of idle time, rounded down to whole
-  seconds and kept between 1 and 32767 seconds.  They are sent every 5 seconds, and the
-  connection is closed after 3 unanswered probes.  Other systems only enable `SO_KEEPALIVE`
-  and use the OS timers.  `{keepalive, false}` in `transport_opts` turns it off, and any
-  other keepalive option set there replaces the matching one.
+  seconds and kept between 1 and 32767 seconds.  They are sent every 5 seconds, or at the
+  idle time if that is shorter, and the connection is closed after 3 unanswered probes.
+  Other systems only enable `SO_KEEPALIVE` and use the OS timers.  `{keepalive, false}` in
+  `transport_opts` turns it off, and any other keepalive option set there replaces the
+  matching one.
 - Fixed `keepidle`, `keepintvl` and `keepcnt` (OTP 28.3 and later) in `transport_opts`
   being dropped for `tcp` and passed to the TLS options for `tls`.  They now go to
   `gen_tcp`.  A connection that sets them fails before OTP 28.3, and one that sets
