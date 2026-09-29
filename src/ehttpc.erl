@@ -1253,7 +1253,7 @@ parse_proxy_opts(Opts) ->
             #{opts => Opts, origin => undefined};
         #{host := _, port := _} = ProxyOpts0 ->
             %% We open connection to proxy, then issue `gun:connect' to target host.
-            {Origin, NewOpts} =
+            {Origin0, NewOpts0} =
                 lists:foldl(
                     fun(Key, {OriginAcc, GunAcc}) ->
                         swap(Key, OriginAcc, GunAcc)
@@ -1261,8 +1261,26 @@ parse_proxy_opts(Opts) ->
                     {ProxyOpts0, proplists:delete(proxy, Opts)},
                     [host, port, transport, {tls_opts, transport_opts}]
                 ),
+            {Origin, NewOpts} = move_tcp_opts_to_proxy(Origin0, NewOpts0),
             #{opts => NewOpts, origin => Origin}
     end.
+
+%% The connection to the proxy is the only TCP connection, so the target's
+%% `gen_tcp' options apply to it, before the proxy's own `tls_opts', and only
+%% the TLS options are left for the target.
+move_tcp_opts_to_proxy(#{tls_opts := TransportOpts} = Origin, Opts) ->
+    case split_transport_opts(TransportOpts) of
+        {[], TLSOpts} ->
+            {Origin#{tls_opts => TLSOpts}, Opts};
+        {TCPOpts, TLSOpts} ->
+            ProxyTransportOpts = TCPOpts ++ proplists:get_value(transport_opts, Opts, []),
+            {
+                Origin#{tls_opts => TLSOpts},
+                [{transport_opts, ProxyTransportOpts} | proplists:delete(transport_opts, Opts)]
+            }
+    end;
+move_tcp_opts_to_proxy(Origin, Opts) ->
+    {Origin, Opts}.
 
 swap(Key, Map, Proplist) when is_atom(Key) ->
     swap({Key, Key}, Map, Proplist);
@@ -1450,6 +1468,47 @@ transport_gun_opts_test_() ->
         ?_assertEqual(
             #{transport => tls, tcp_opts => [], tls_opts => [{verify, verify_none}]},
             Transport(ProxyOpts)
+        )
+    ].
+
+proxy_tcp_opts_test_() ->
+    Parse = fun(ProxyOpts) ->
+        #{opts := Opts, origin := Origin} = parse_proxy_opts([
+            {host, "example.com"},
+            {port, 443},
+            {transport, tls},
+            {transport_opts, [{keepalive, false}, {nodelay, true}, {verify, verify_none}]},
+            {keepalive, 30_000},
+            {proxy, ProxyOpts}
+        ]),
+        {
+            maps:with([transport, tcp_opts, tls_opts], gun_opts(Opts)),
+            maps:with([transport, tls_opts], Origin)
+        }
+    end,
+    [
+        ?_assertEqual(
+            {
+                #{transport => tcp, tcp_opts => [{keepalive, false}, {nodelay, true}]},
+                #{transport => tls, tls_opts => [{verify, verify_none}]}
+            },
+            Parse(#{host => "proxy", port => 3128})
+        ),
+        ?_assertEqual(
+            {
+                #{
+                    transport => tls,
+                    tcp_opts => [{keepalive, false}, {nodelay, true}],
+                    tls_opts => [{server_name_indication, "proxy"}]
+                },
+                #{transport => tls, tls_opts => [{verify, verify_none}]}
+            },
+            Parse(#{
+                host => "proxy",
+                port => 3128,
+                transport => tls,
+                tls_opts => [{server_name_indication, "proxy"}]
+            })
         )
     ].
 

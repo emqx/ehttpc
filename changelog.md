@@ -15,7 +15,11 @@
   `keepidle` fails on macOS.
 - Fixed `transport_opts` being ignored when it came before `transport` or when `transport`
   was not set, and `transport` being ignored without `transport_opts`.  A `proxy` that sets
-  `transport` or `tls_opts` now uses them for the connection to the proxy.
+  `transport` now uses it and its `tls_opts` for the connection to the proxy.
+- With a `proxy`, the `gen_tcp` options in `transport_opts`, including the keepalive ones,
+  now apply to the connection to the proxy, the only TCP connection, and only the TLS
+  options are used for the target.  All of them used to be passed to the target's TLS
+  options.
 
 ## 0.7.6
 
