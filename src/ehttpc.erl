@@ -501,7 +501,33 @@ gun_opts(Opts) ->
         %% Link with client process directly.
         supervise => false
     }),
-    with_tcp_keepalive(proplists:get_value(keepalive, Opts, infinity), GunOpts).
+    TransportGunOpts = transport_gun_opts(
+        proplists:get_value(transport, Opts),
+        proplists:get_value(transport_opts, Opts),
+        proplists:get_value(port, Opts)
+    ),
+    with_tcp_keepalive(
+        proplists:get_value(keepalive, Opts, infinity), maps:merge(GunOpts, TransportGunOpts)
+    ).
+
+%% `transport' and `transport_opts' can be anywhere in the pool options, and
+%% the first of each is used.  Without `transport', `transport_opts' applies
+%% to the transport gun picks from the port.
+transport_gun_opts(undefined, undefined, _Port) ->
+    #{};
+transport_gun_opts(undefined, TransportOpts, Port) ->
+    transport_gun_opts(gun:default_transport(Port), TransportOpts);
+transport_gun_opts(Transport, undefined, _Port) ->
+    #{transport => Transport};
+transport_gun_opts(Transport, TransportOpts, _Port) ->
+    transport_gun_opts(Transport, TransportOpts).
+
+transport_gun_opts(tcp, TransportOpts) ->
+    {TCPOpts, _} = split_transport_opts(TransportOpts),
+    #{transport => tcp, tcp_opts => TCPOpts};
+transport_gun_opts(Transport, TransportOpts) when Transport == tls; Transport == ssl ->
+    {TCPOpts, TLSOpts} = split_transport_opts(TransportOpts),
+    #{transport => Transport, tcp_opts => TCPOpts, tls_opts => TLSOpts}.
 
 %% The `keepalive' option is the idle time in milliseconds before TCP
 %% keepalive probes start.  `{keepalive, false}' in `transport_opts' turns
@@ -575,20 +601,6 @@ gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
 gun_opts([{protocols, Protocols} | Opts], Acc) ->
     gun_opts(Opts, Acc#{protocols => Protocols});
-gun_opts([{transport, Transport} | Opts0], Acc0) ->
-    Acc1 = Acc0#{transport => Transport},
-    case lists:keytake(transport_opts, 1, Opts0) of
-        {value, {_, TransportOpts}, Opts} when Transport == tcp ->
-            {TCPOpts, _} = split_transport_opts(TransportOpts),
-            Acc = Acc1#{tcp_opts => TCPOpts};
-        {value, {_, TransportOpts}, Opts} when Transport == tls; Transport == ssl ->
-            {TCPOpts, TLSOpts} = split_transport_opts(TransportOpts),
-            Acc = Acc1#{tcp_opts => TCPOpts, tls_opts => TLSOpts};
-        false ->
-            Acc = Acc0,
-            Opts = Opts0
-    end,
-    gun_opts(Opts, Acc);
 gun_opts([_ | Opts], Acc) ->
     %% ignore by default
     gun_opts(Opts, Acc).
@@ -1403,6 +1415,42 @@ tcp_keepalive_opts_test_() ->
         {Timeout, Idle, Interval} <- [
             {500, 1, 1}, {3_000, 3, 3}, {30_000, 30, 5}, {40_000_000, 32767, 5}
         ]
+    ].
+
+transport_gun_opts_test_() ->
+    Transport = fun(Opts) -> maps:with([transport, tcp_opts, tls_opts], gun_opts(Opts)) end,
+    #{opts := ProxyOpts} = parse_proxy_opts([
+        {host, "example.com"},
+        {port, 443},
+        {transport, tcp},
+        {proxy, #{
+            host => "proxy", port => 3128, transport => tls, tls_opts => [{verify, verify_none}]
+        }}
+    ]),
+    [
+        ?_assertEqual(
+            #{transport => tcp, tcp_opts => [{keepalive, false}]},
+            Transport([
+                {transport_opts, [{keepalive, false}]}, {transport, tcp}, {keepalive, 30_000}
+            ])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [{nodelay, true}], tls_opts => [{verify, verify_none}]},
+            Transport([{transport_opts, [{nodelay, true}, {verify, verify_none}]}, {transport, tls}])
+        ),
+        ?_assertEqual(#{transport => tls}, Transport([{port, 8443}, {transport, tls}])),
+        ?_assertEqual(
+            #{transport => tcp, tcp_opts => [{keepalive, false}]},
+            Transport([{port, 8080}, {transport_opts, [{keepalive, false}]}, {keepalive, 30_000}])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [], tls_opts => [{verify, verify_none}]},
+            Transport([{port, 443}, {transport_opts, [{verify, verify_none}]}])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [], tls_opts => [{verify, verify_none}]},
+            Transport(ProxyOpts)
+        )
     ].
 
 expected_tcp_keepalive_opts({unix, linux}, Idle, Interval) ->

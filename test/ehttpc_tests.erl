@@ -902,9 +902,17 @@ tcp_keepalive_test_() ->
         ?assertEqual({ok, [{keepalive, true}]}, inet:getopts(Socket, [keepalive])),
         assert_tcp_keepalive_timers(Socket, os:type())
     end,
+    OptOutPoolOpts = [{transport_opts, [{keepalive, false}]}, {transport, tcp} | PoolOpts],
+    CheckOptOut = fun() ->
+        ?assertMatch({ok, 200, _, _}, ehttpc:request(?POOL, get, req(), 1000, 0)),
+        {_, #{client := Client}} = ehttpc:get_state(?POOL),
+        #{socket := Socket} = gun:info(Client),
+        ?assertEqual({ok, [{keepalive, false}]}, inet:getopts(Socket, [keepalive]))
+    end,
     [
         {"no transport_opts", fun() -> ?WITH(ServerOpts, PoolOpts, Check()) end},
-        {"tcp transport_opts", fun() -> ?WITH(ServerOpts, TCPPoolOpts, Check()) end}
+        {"tcp transport_opts", fun() -> ?WITH(ServerOpts, TCPPoolOpts, Check()) end},
+        {"opt-out before transport", fun() -> ?WITH(ServerOpts, OptOutPoolOpts, CheckOptOut()) end}
     ].
 
 %% Idle time, probe interval and probe count, in this order.

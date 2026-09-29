@@ -13,6 +13,9 @@
   being dropped for `tcp` and passed to the TLS options for `tls`.  They now go to
   `gen_tcp`.  A connection that sets them fails before OTP 28.3, and one that sets
   `keepidle` fails on macOS.
+- Fixed `transport_opts` being ignored when it came before `transport` or when `transport`
+  was not set, and `transport` being ignored without `transport_opts`.  A `proxy` that sets
+  `transport` or `tls_opts` now uses them for the connection to the proxy.
 
 ## 0.7.6
 
