@@ -491,7 +491,7 @@ gun_opts(Opts) ->
     %% retry at lower level will likely cause
     %% gen_server callers to time out anyway
     GunNoRetry = 0,
-    gun_opts(Opts, #{
+    GunOpts = gun_opts(Opts, #{
         retry => GunNoRetry,
         connect_timeout => 5000,
         %% The keepalive mechanism of gun will send "\r\n" for keepalive,
@@ -500,7 +500,94 @@ gun_opts(Opts) ->
         protocols => [http],
         %% Link with client process directly.
         supervise => false
-    }).
+    }),
+    TransportGunOpts = transport_gun_opts(
+        proplists:get_value(transport, Opts),
+        proplists:get_value(transport_opts, Opts),
+        proplists:get_value(port, Opts)
+    ),
+    with_tcp_keepalive(
+        proplists:get_value(keepalive, Opts, infinity), maps:merge(GunOpts, TransportGunOpts)
+    ).
+
+%% `transport' and `transport_opts' can be anywhere in the pool options, and
+%% the first of each is used.  Without `transport', `transport_opts' applies
+%% to the transport gun picks from the port.
+transport_gun_opts(undefined, undefined, _Port) ->
+    #{};
+transport_gun_opts(undefined, TransportOpts, Port) ->
+    transport_gun_opts(gun:default_transport(Port), TransportOpts);
+transport_gun_opts(Transport, undefined, _Port) ->
+    #{transport => Transport};
+transport_gun_opts(Transport, TransportOpts, _Port) ->
+    transport_gun_opts(Transport, TransportOpts).
+
+transport_gun_opts(tcp, TransportOpts) ->
+    {TCPOpts, _} = split_transport_opts(TransportOpts),
+    #{transport => tcp, tcp_opts => TCPOpts};
+transport_gun_opts(Transport, TransportOpts) when Transport == tls; Transport == ssl ->
+    {TCPOpts, TLSOpts} = split_transport_opts(TransportOpts),
+    #{transport => Transport, tcp_opts => TCPOpts, tls_opts => TLSOpts}.
+
+%% The `keepalive' option is the idle time in milliseconds before TCP
+%% keepalive probes start.  `{keepalive, false}' in `transport_opts' turns
+%% it off.  Any other keepalive option set in `transport_opts' replaces the
+%% one the `keepalive' option would set.
+with_tcp_keepalive(Timeout, GunOpts) when is_integer(Timeout), Timeout > 0 ->
+    %% gun uses these send timeouts only when `tcp_opts' is not set, and the
+    %% keepalive options are added to `tcp_opts'.
+    TCPOpts = maps:get(tcp_opts, GunOpts, [{send_timeout, 15000}, {send_timeout_close, true}]),
+    case lists:member({keepalive, false}, TCPOpts) of
+        true ->
+            GunOpts;
+        false ->
+            KeepaliveOpts = [
+                Opt
+             || {Name, Opt} <- tcp_keepalive_opts(os:type(), Timeout),
+                not is_tcp_opt_set(Name, Opt, TCPOpts)
+            ],
+            GunOpts#{tcp_opts => KeepaliveOpts ++ TCPOpts}
+    end;
+with_tcp_keepalive(_Timeout, GunOpts) ->
+    GunOpts.
+
+%% Each option is paired with the name of the native option that sets the
+%% same value.  Probes are sent every 5 seconds, or at the idle time if that
+%% is shorter, and the connection is dropped after 3 unanswered probes.  Raw
+%% options are used because the native ones only exist since OTP 28.3, and
+%% native `keepidle' is Linux only.  Linux rejects an idle time above 32767
+%% seconds, and a rejected raw option is silently ignored.
+tcp_keepalive_opts(OS, Timeout) ->
+    Idle = min(32767, max(1, Timeout div 1000)),
+    Interval = min(Idle, 5),
+    Count = 3,
+    case OS of
+        {unix, linux} ->
+            [
+                {keepalive, {keepalive, true}},
+                {keepidle, {raw, 6, 4, <<Idle:32/native>>}},
+                {keepintvl, {raw, 6, 5, <<Interval:32/native>>}},
+                {keepcnt, {raw, 6, 6, <<Count:32/native>>}}
+            ];
+        {unix, darwin} ->
+            [
+                {keepalive, {keepalive, true}},
+                {keepidle, {raw, 6, 16#10, <<Idle:32/native>>}},
+                {keepintvl, {raw, 6, 16#101, <<Interval:32/native>>}},
+                {keepcnt, {raw, 6, 16#102, <<Count:32/native>>}}
+            ];
+        _ ->
+            [{keepalive, {keepalive, true}}]
+    end.
+
+is_tcp_opt_set(Name, {raw, Level, Num, _}, TCPOpts) ->
+    lists:keymember(Name, 1, TCPOpts) orelse
+        lists:any(fun(O) -> is_raw_opt(Level, Num, O) end, TCPOpts);
+is_tcp_opt_set(Name, _Opt, TCPOpts) ->
+    lists:keymember(Name, 1, TCPOpts).
+
+is_raw_opt(Level, Num, {raw, Level, Num, _}) -> true;
+is_raw_opt(_Level, _Num, _Opt) -> false.
 
 gun_opts([], Acc) ->
     Acc;
@@ -514,20 +601,6 @@ gun_opts([{connect_timeout, ConnectTimeout} | Opts], Acc) ->
     gun_opts(Opts, Acc#{connect_timeout => ConnectTimeout});
 gun_opts([{protocols, Protocols} | Opts], Acc) ->
     gun_opts(Opts, Acc#{protocols => Protocols});
-gun_opts([{transport, Transport} | Opts0], Acc0) ->
-    Acc1 = Acc0#{transport => Transport},
-    case lists:keytake(transport_opts, 1, Opts0) of
-        {value, {_, TransportOpts}, Opts} when Transport == tcp ->
-            {TCPOpts, _} = split_transport_opts(TransportOpts),
-            Acc = Acc1#{tcp_opts => TCPOpts};
-        {value, {_, TransportOpts}, Opts} when Transport == tls; Transport == ssl ->
-            {TCPOpts, TLSOpts} = split_transport_opts(TransportOpts),
-            Acc = Acc1#{tcp_opts => TCPOpts, tls_opts => TLSOpts};
-        false ->
-            Acc = Acc0,
-            Opts = Opts0
-    end,
-    gun_opts(Opts, Acc);
 gun_opts([_ | Opts], Acc) ->
     %% ignore by default
     gun_opts(Opts, Acc).
@@ -561,6 +634,10 @@ is_gen_tcp_option({header, _}) -> ignore;
 is_gen_tcp_option({high_msgq_watermark, _}) -> true;
 is_gen_tcp_option({high_watermark, _}) -> true;
 is_gen_tcp_option({keepalive, _}) -> true;
+%% OTP 28.3 and later, keepidle is Linux only
+is_gen_tcp_option({keepcnt, _}) -> true;
+is_gen_tcp_option({keepidle, _}) -> true;
+is_gen_tcp_option({keepintvl, _}) -> true;
 is_gen_tcp_option({linger, _}) -> true;
 is_gen_tcp_option({low_msgq_watermark, _}) -> true;
 is_gen_tcp_option({low_watermark, _}) -> true;
@@ -1176,7 +1253,7 @@ parse_proxy_opts(Opts) ->
             #{opts => Opts, origin => undefined};
         #{host := _, port := _} = ProxyOpts0 ->
             %% We open connection to proxy, then issue `gun:connect' to target host.
-            {Origin, NewOpts} =
+            {Origin0, NewOpts0} =
                 lists:foldl(
                     fun(Key, {OriginAcc, GunAcc}) ->
                         swap(Key, OriginAcc, GunAcc)
@@ -1184,8 +1261,26 @@ parse_proxy_opts(Opts) ->
                     {ProxyOpts0, proplists:delete(proxy, Opts)},
                     [host, port, transport, {tls_opts, transport_opts}]
                 ),
+            {Origin, NewOpts} = move_tcp_opts_to_proxy(Origin0, NewOpts0),
             #{opts => NewOpts, origin => Origin}
     end.
+
+%% The connection to the proxy is the only TCP connection, so the target's
+%% `gen_tcp' options apply to it, before the proxy's own `tls_opts', and only
+%% the TLS options are left for the target.
+move_tcp_opts_to_proxy(#{tls_opts := TransportOpts} = Origin, Opts) ->
+    case split_transport_opts(TransportOpts) of
+        {[], TLSOpts} ->
+            {Origin#{tls_opts => TLSOpts}, Opts};
+        {TCPOpts, TLSOpts} ->
+            ProxyTransportOpts = TCPOpts ++ proplists:get_value(transport_opts, Opts, []),
+            {
+                Origin#{tls_opts => TLSOpts},
+                [{transport_opts, ProxyTransportOpts} | proplists:delete(transport_opts, Opts)]
+            }
+    end;
+move_tcp_opts_to_proxy(Origin, Opts) ->
+    {Origin, Opts}.
 
 swap(Key, Map, Proplist) when is_atom(Key) ->
     swap({Key, Key}, Map, Proplist);
@@ -1287,5 +1382,151 @@ prioritise_oldest_test() ->
     ?assertEqual({value, 1}, PeekOldest(Q)),
     ?assertMatch({{value, 1}, _}, OutOldest(Q)),
     ?assertMatch({{value, 1}, _}, queue:out(Q)).
+
+tcp_keepalive_gun_opts_test_() ->
+    KeepaliveOpts = expected_tcp_keepalive_opts(os:type(), 30, 5),
+    %% The raw option that sets the idle time, on systems that have one
+    IdleRaw = [O || {raw, _, N, _} = O <- KeepaliveOpts, N =:= 4 orelse N =:= 16#10],
+    CallerIdleRaw = [{raw, L, N, <<60:32/native>>} || {raw, L, N, _} <- IdleRaw],
+    TCP = [{transport, tcp}, {transport_opts, [{nodelay, true}]}],
+    TLS = [{transport, tls}, {transport_opts, [{nodelay, true}, {verify, verify_none}]}],
+    TCPOpts = fun(Opts) -> maps:get(tcp_opts, gun_opts(Opts)) end,
+    WithTCPOpts = fun(Opts) ->
+        TCPOpts([{keepalive, 30_000}, {transport, tcp}, {transport_opts, Opts}])
+    end,
+    [
+        ?_assertEqual([{nodelay, true}], TCPOpts(TCP)),
+        ?_assertEqual([{nodelay, true}], TCPOpts([{keepalive, infinity} | TCP])),
+        ?_assertEqual(KeepaliveOpts ++ [{nodelay, true}], TCPOpts([{keepalive, 30_000} | TCP])),
+        ?_assertEqual(
+            #{tcp_opts => KeepaliveOpts ++ [{nodelay, true}], tls_opts => [{verify, verify_none}]},
+            maps:with([tcp_opts, tls_opts], gun_opts([{keepalive, 30_000} | TLS]))
+        ),
+        ?_assertEqual(
+            KeepaliveOpts ++ [{send_timeout, 15000}, {send_timeout_close, true}],
+            TCPOpts([{keepalive, 30_000}])
+        ),
+        ?_assertEqual(
+            expected_tcp_keepalive_opts(os:type(), 1, 1) ++ [{nodelay, true}],
+            TCPOpts([{keepalive, 500} | TCP])
+        ),
+        ?_assertEqual([{keepalive, false}], WithTCPOpts([{keepalive, false}])),
+        ?_assertEqual(
+            tl(KeepaliveOpts) ++ [{keepalive, true}],
+            WithTCPOpts([{keepalive, true}])
+        ),
+        ?_assertEqual(
+            (KeepaliveOpts -- IdleRaw) ++ [{keepidle, 60}],
+            WithTCPOpts([{keepidle, 60}])
+        ),
+        ?_assertEqual(
+            (KeepaliveOpts -- IdleRaw) ++ CallerIdleRaw,
+            WithTCPOpts(CallerIdleRaw)
+        )
+    ].
+
+tcp_keepalive_opts_test_() ->
+    Opts = fun(OS, Timeout) -> [O || {_Name, O} <- tcp_keepalive_opts(OS, Timeout)] end,
+    [
+        ?_assertEqual(expected_tcp_keepalive_opts(OS, Idle, Interval), Opts(OS, Timeout))
+     || OS <- [{unix, linux}, {unix, darwin}, {unix, freebsd}, {win32, nt}],
+        {Timeout, Idle, Interval} <- [
+            {500, 1, 1}, {3_000, 3, 3}, {30_000, 30, 5}, {40_000_000, 32767, 5}
+        ]
+    ].
+
+transport_gun_opts_test_() ->
+    Transport = fun(Opts) -> maps:with([transport, tcp_opts, tls_opts], gun_opts(Opts)) end,
+    #{opts := ProxyOpts} = parse_proxy_opts([
+        {host, "example.com"},
+        {port, 443},
+        {transport, tcp},
+        {proxy, #{
+            host => "proxy", port => 3128, transport => tls, tls_opts => [{verify, verify_none}]
+        }}
+    ]),
+    [
+        ?_assertEqual(
+            #{transport => tcp, tcp_opts => [{keepalive, false}]},
+            Transport([
+                {transport_opts, [{keepalive, false}]}, {transport, tcp}, {keepalive, 30_000}
+            ])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [{nodelay, true}], tls_opts => [{verify, verify_none}]},
+            Transport([{transport_opts, [{nodelay, true}, {verify, verify_none}]}, {transport, tls}])
+        ),
+        ?_assertEqual(#{transport => tls}, Transport([{port, 8443}, {transport, tls}])),
+        ?_assertEqual(
+            #{transport => tcp, tcp_opts => [{keepalive, false}]},
+            Transport([{port, 8080}, {transport_opts, [{keepalive, false}]}, {keepalive, 30_000}])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [], tls_opts => [{verify, verify_none}]},
+            Transport([{port, 443}, {transport_opts, [{verify, verify_none}]}])
+        ),
+        ?_assertEqual(
+            #{transport => tls, tcp_opts => [], tls_opts => [{verify, verify_none}]},
+            Transport(ProxyOpts)
+        )
+    ].
+
+proxy_tcp_opts_test_() ->
+    Parse = fun(ProxyOpts) ->
+        #{opts := Opts, origin := Origin} = parse_proxy_opts([
+            {host, "example.com"},
+            {port, 443},
+            {transport, tls},
+            {transport_opts, [{keepalive, false}, {nodelay, true}, {verify, verify_none}]},
+            {keepalive, 30_000},
+            {proxy, ProxyOpts}
+        ]),
+        {
+            maps:with([transport, tcp_opts, tls_opts], gun_opts(Opts)),
+            maps:with([transport, tls_opts], Origin)
+        }
+    end,
+    [
+        ?_assertEqual(
+            {
+                #{transport => tcp, tcp_opts => [{keepalive, false}, {nodelay, true}]},
+                #{transport => tls, tls_opts => [{verify, verify_none}]}
+            },
+            Parse(#{host => "proxy", port => 3128})
+        ),
+        ?_assertEqual(
+            {
+                #{
+                    transport => tls,
+                    tcp_opts => [{keepalive, false}, {nodelay, true}],
+                    tls_opts => [{server_name_indication, "proxy"}]
+                },
+                #{transport => tls, tls_opts => [{verify, verify_none}]}
+            },
+            Parse(#{
+                host => "proxy",
+                port => 3128,
+                transport => tls,
+                tls_opts => [{server_name_indication, "proxy"}]
+            })
+        )
+    ].
+
+expected_tcp_keepalive_opts({unix, linux}, Idle, Interval) ->
+    [
+        {keepalive, true},
+        {raw, 6, 4, <<Idle:32/native>>},
+        {raw, 6, 5, <<Interval:32/native>>},
+        {raw, 6, 6, <<3:32/native>>}
+    ];
+expected_tcp_keepalive_opts({unix, darwin}, Idle, Interval) ->
+    [
+        {keepalive, true},
+        {raw, 6, 16#10, <<Idle:32/native>>},
+        {raw, 6, 16#101, <<Interval:32/native>>},
+        {raw, 6, 16#102, <<3:32/native>>}
+    ];
+expected_tcp_keepalive_opts(_OS, _Idle, _Interval) ->
+    [{keepalive, true}].
 
 -endif.

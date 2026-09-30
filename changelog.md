@@ -1,5 +1,26 @@
 # ehttpc changes
 
+## 0.7.7
+
+- Added TCP keepalive for the `keepalive` pool option, which used to be ignored.  On Linux
+  and macOS, probes start after `keepalive` milliseconds of idle time, rounded down to whole
+  seconds and kept between 1 and 32767 seconds.  They are sent every 5 seconds, or at the
+  idle time if that is shorter, and the connection is closed after 3 unanswered probes.
+  Other systems only enable `SO_KEEPALIVE` and use the OS timers.  `{keepalive, false}` in
+  `transport_opts` turns it off, and any other keepalive option set there replaces the
+  matching one.
+- Fixed `keepidle`, `keepintvl` and `keepcnt` (OTP 28.3 and later) in `transport_opts`
+  being dropped for `tcp` and passed to the TLS options for `tls`.  They now go to
+  `gen_tcp`.  A connection that sets them fails before OTP 28.3, and one that sets
+  `keepidle` fails on macOS.
+- Fixed `transport_opts` being ignored when it came before `transport` or when `transport`
+  was not set, and `transport` being ignored without `transport_opts`.  A `proxy` that sets
+  `transport` now uses it and its `tls_opts` for the connection to the proxy.
+- With a `proxy`, the `gen_tcp` options in `transport_opts`, including the keepalive ones,
+  now apply to the connection to the proxy, the only TCP connection, and only the TLS
+  options are used for the target.  All of them used to be passed to the target's TLS
+  options.
+
 ## 0.7.6
 
 - Zombie-connection detection no longer waits for the full request timeout. A connection
