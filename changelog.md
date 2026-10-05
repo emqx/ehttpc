@@ -1,5 +1,9 @@
 # ehttpc changes
 
+## 0.7.8
+
+- Made it possible to call `ehttpc:health_check` with a timeout of `infinity`.
+
 ## 0.7.7
 
 - Added TCP keepalive for the `keepalive` pool option, which used to be ignored.  On Linux
