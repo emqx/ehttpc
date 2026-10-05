@@ -146,9 +146,9 @@ get_state(Worker, Style) when is_pid(Worker) ->
 start_link(Pool, Id, Opts) ->
     gen_server:start_link(?MODULE, [Pool, Id, Opts], []).
 
--spec health_check(pid(), integer()) -> ok | {error, term()}.
+-spec health_check(pid(), timeout()) -> ok | {error, term()}.
 health_check(Worker, Timeout) ->
-    CallTimeout = Timeout + timer:seconds(2),
+    CallTimeout = health_check_call_timeout(Timeout),
     try
         gen_server:call(Worker, {health_check, Timeout}, CallTimeout)
     catch
@@ -1245,6 +1245,11 @@ enqueue_latest_fn(_) ->
 
 fresh_expire_at(Timeout) when Timeout =:= infinity; is_integer(Timeout) ->
     {now_(), Timeout}.
+
+health_check_call_timeout(infinity) ->
+    infinity;
+health_check_call_timeout(Timeout) when is_integer(Timeout) ->
+    Timeout + timer:seconds(2).
 
 parse_proxy_opts(Opts) ->
     %% Target host and port

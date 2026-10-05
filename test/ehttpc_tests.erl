@@ -448,7 +448,26 @@ health_check_test_() ->
                     )
                 end
             )
-        end}
+        end},
+        %% infinity timeout
+        {timeout, 20,
+            ?_test(
+                ?WITH(
+                    #{
+                        port => Port,
+                        name => ?FUNCTION_NAME,
+                        delay => 0
+                    },
+                    pool_opts(Port, true),
+                    begin
+                        Worker = ehttpc_pool:pick_worker(?POOL),
+                        ?assertEqual(
+                            ok,
+                            ehttpc:health_check(Worker, infinity)
+                        )
+                    end
+                )
+            )}
     ].
 
 health_check_abnormal_test_() ->
