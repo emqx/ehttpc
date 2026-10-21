@@ -770,6 +770,39 @@ head_request_test() ->
         {ok, _, _} = ehttpc:request(?POOL, head, <<"/">>)
     ).
 
+chunked_trailers_test_() ->
+    [
+        {integer_to_list(Count), fun() -> chunked_trailers(Count) end}
+     || Count <- [0, 2]
+    ].
+
+chunked_trailers(Count) ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => chunked_trailers,
+        chunked => #{chunk_size => 3, chunks => Count, trailers => #{<<"x-check">> => <<"ok">>}}
+    },
+    ?WITH(
+        ServerOpts,
+        pool_opts(Port, false),
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Expected = iolist_to_binary([binary:copy(<<I>>, 3) || I <- lists:seq(1, Count)]),
+            ?assertMatch({ok, 200, _, Expected}, ehttpc:request(Worker, get, req(), 500, 0)),
+            #{client := Client} = ehttpc:get_state(Worker, normal),
+            Tester = self(),
+            Callback = {fun(Result) -> Tester ! {trailers_result, Result} end, []},
+            ok = ehttpc:request_async(Worker, get, req(), 500, Callback),
+            receive
+                {trailers_result, Result} -> ?assertMatch({ok, 200, _, Expected}, Result)
+            after 1_000 ->
+                error(trailers_callback_timeout)
+            end,
+            ?assertMatch(#{client := Client}, ehttpc:get_state(Worker, normal))
+        end
+    ).
+
 data_chunked_test() ->
     Port = ?PORT,
     Host = "127.0.0.1",
