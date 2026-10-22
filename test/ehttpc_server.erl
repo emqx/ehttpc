@@ -81,7 +81,9 @@ listen(Port) ->
     end),
     receive
         {ok, LSocket} ->
-            {ok, LSocket}
+            {ok, LSocket};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 loop(Socket, Opts) ->

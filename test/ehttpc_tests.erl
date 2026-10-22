@@ -20,7 +20,7 @@
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -define(POOL, <<"testpool">>).
--define(PORT, (60000 + ?LINE)).
+-define(PORT, (62000 + ?LINE)).
 
 -define(WITH_SERVER(Opts, Expr),
     with_server(Opts, fun() -> Expr end)
