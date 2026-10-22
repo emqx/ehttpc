@@ -1,5 +1,11 @@
 # ehttpc changes
 
+## 0.7.9
+
+- Complete chunked responses that end with trailers, preserving the response status,
+  headers, and body for synchronous and asynchronous requests.
+  Trailer fields are not merged into the response headers.
+
 ## 0.7.8
 
 - Made it possible to call `ehttpc:health_check` with a timeout of `infinity`.

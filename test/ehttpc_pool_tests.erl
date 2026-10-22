@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
--define(PORT, (60000 + ?LINE)).
+-define(PORT, (62000 + ?LINE)).
 
 kill_recover_test_() ->
     {

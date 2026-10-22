@@ -81,7 +81,9 @@ listen(Port) ->
     end),
     receive
         {ok, LSocket} ->
-            {ok, LSocket}
+            {ok, LSocket};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 loop(Socket, Opts) ->
@@ -214,9 +216,10 @@ socket_send(
             _ ->
                 0
         end,
+    BeforeFin = maps:get(before_fin, maps:get(chunked, Opts, #{}), fun() -> ok end),
     case gen_tcp:send(Socket, Headers) of
         ok ->
-            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay) of
+            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay, BeforeFin) of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -226,21 +229,21 @@ socket_send(
             {error, Reason}
     end.
 
-socket_send_body_chunks(_Socket, [], _, _) ->
+socket_send_body_chunks(_Socket, [], _, _, _) ->
     ok;
-socket_send_body_chunks(Socket, [H | T], Delay, FinDelay) ->
+socket_send_body_chunks(Socket, [H | T], Delay, FinDelay, BeforeFin) ->
     case gen_tcp:send(Socket, H) of
         ok ->
             %% maybe delya each chunk (when Delay > 0)
             timer:sleep(Delay),
             case T of
-                [_] when FinDelay > 0 ->
-                    %% delay the last chunk
-                    timer:sleep(FinDelay);
+                [_] ->
+                    BeforeFin(),
+                    FinDelay > 0 andalso timer:sleep(FinDelay);
                 _ ->
                     ok
             end,
-            socket_send_body_chunks(Socket, T, Delay, FinDelay);
+            socket_send_body_chunks(Socket, T, Delay, FinDelay, BeforeFin);
         {error, Reason} ->
             {error, Reason}
     end.
@@ -277,8 +280,10 @@ make_response(Opts, IsHead) ->
     },
     Resp.
 
-make_chunks(#{chunked := #{chunk_size := Size, chunks := Count}}) ->
+make_chunks(#{chunked := #{chunk_size := Size, chunks := Count} = Chunked}) ->
     %% we use the counts to generat bytes, (to verify the final number of chunks received)
     Count > 255 andalso error({bad_chunk_count, Count}),
     RawL = [iolist_to_binary(lists:duplicate(Size, I)) || I <- lists:seq(1, Count)],
-    [cow_http_te:chunk(I) || I <- RawL] ++ [cow_http_te:last_chunk()].
+    Trailers = maps:to_list(maps:get(trailers, Chunked, #{})),
+    Last = ["0\r\n", [[K, ": ", V, "\r\n"] || {K, V} <- Trailers], "\r\n"],
+    [cow_http_te:chunk(I) || I <- RawL] ++ [Last].

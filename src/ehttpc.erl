@@ -381,6 +381,11 @@ do_handle_info(
 ) ->
     handle_gun_reply(State, Client, StreamRef, IsFin, ?undef, ?undef, Data);
 do_handle_info(
+    {gun_trailers, Client, StreamRef, _Trailers},
+    #state{client = Client} = State
+) ->
+    handle_gun_reply(State, Client, StreamRef, fin, ?undef, ?undef, <<>>);
+do_handle_info(
     {gun_error, Client, StreamRef, Reason},
     State = #state{client = Client, requests = Requests}
 ) ->

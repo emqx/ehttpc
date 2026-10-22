@@ -20,7 +20,7 @@
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
 -define(POOL, <<"testpool">>).
--define(PORT, (60000 + ?LINE)).
+-define(PORT, (62000 + ?LINE)).
 
 -define(WITH_SERVER(Opts, Expr),
     with_server(Opts, fun() -> Expr end)
@@ -769,6 +769,140 @@ head_request_test() ->
         pool_opts(Host, Port, true),
         {ok, _, _} = ehttpc:request(?POOL, head, <<"/">>)
     ).
+
+chunked_trailers_test_() ->
+    [
+        {integer_to_list(Count), fun() -> chunked_trailers(Count) end}
+     || Count <- [0, 2]
+    ].
+
+chunked_trailers(Count) ->
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => chunked_trailers,
+        chunked => #{chunk_size => 3, chunks => Count, trailers => #{<<"x-check">> => <<"ok">>}}
+    },
+    ?WITH(
+        ServerOpts,
+        pool_opts(Port, false),
+        begin
+            Worker = ehttpc_pool:pick_worker(?POOL),
+            Expected = iolist_to_binary([binary:copy(<<I>>, 3) || I <- lists:seq(1, Count)]),
+            ?assertMatch({ok, 200, _, Expected}, ehttpc:request(Worker, get, req(), 500, 0)),
+            #{client := Client} = ehttpc:get_state(Worker, normal),
+            Tester = self(),
+            Callback = {fun(Result) -> Tester ! {trailers_result, Result} end, []},
+            ok = ehttpc:request_async(Worker, get, req(), 500, Callback),
+            receive
+                {trailers_result, Result} -> ?assertMatch({ok, 200, _, Expected}, Result)
+            after 1_000 ->
+                error(trailers_callback_timeout)
+            end,
+            ?assertMatch(#{client := Client}, ehttpc:get_state(Worker, normal))
+        end
+    ).
+
+chunked_trailers_pipeline_test() ->
+    with_controlled_trailers(fun(Worker) ->
+        ok = request_trailers_async(Worker, first),
+        Server = await_trailers(),
+        ok = request_trailers_async(Worker, second),
+        ?assertMatch(#{requests := #{sent := 2}}, ehttpc:get_state(Worker)),
+        #{client := Client} = ehttpc:get_state(Worker),
+        Server ! send_trailers,
+        assert_trailers_result(first),
+        Server = await_trailers(),
+        Server ! send_trailers,
+        assert_trailers_result(second),
+        ?assertMatch(#{client := Client, requests := #{sent := 0}}, ehttpc:get_state(Worker))
+    end).
+
+chunked_trailers_after_timeout_test() ->
+    with_controlled_trailers(fun(Worker) ->
+        ?assertEqual({error, timeout}, ehttpc:request(Worker, get, req(), 200, 0)),
+        Server = await_trailers(),
+        #{client := Client} = ehttpc:get_state(Worker),
+        ok = request_trailers_async(Worker, next),
+        ?assertMatch(#{requests := #{sent := 2}}, ehttpc:get_state(Worker)),
+        Server ! send_trailers,
+        Server = await_trailers(),
+        Server ! send_trailers,
+        assert_trailers_result(next),
+        ?assertMatch(#{client := Client, requests := #{sent := 0}}, ehttpc:get_state(Worker))
+    end).
+
+chunked_trailers_after_cancel_test() ->
+    with_controlled_trailers(fun(Worker) ->
+        Tester = self(),
+        ok = ehttpc:request_async(Worker, get, req(), 1_000, #{
+            final_reply => {fun(Result) -> Tester ! {cancelled_result, Result} end, []},
+            stream_ref => {fun(Ref, W) -> Tester ! {trailers_stream, Ref, W} end, []}
+        }),
+        Ref =
+            receive
+                {trailers_stream, R, Worker} -> R
+            after 1_000 -> error(no_stream_ref)
+            end,
+        Server = await_trailers(),
+        ok = ehttpc:cancel(Worker, Ref),
+        ?assertMatch(#{requests := #{sent := 0}}, ehttpc:get_state(Worker)),
+        Server ! send_trailers,
+        ok = request_trailers_async(Worker, next),
+        Server = await_trailers(),
+        Server ! send_trailers,
+        assert_trailers_result(next),
+        receive
+            {cancelled_result, _} -> error(callback_after_cancel)
+        after 100 -> ok
+        end
+    end).
+
+with_controlled_trailers(Fun) ->
+    Tester = self(),
+    BeforeFin = fun() ->
+        Tester ! {trailers_ready, self()},
+        receive
+            send_trailers -> ok
+        after 2_000 -> error(trailers_not_released)
+        end
+    end,
+    Port = ?PORT,
+    ServerOpts = #{
+        port => Port,
+        name => controlled_trailers,
+        chunked => #{
+            chunk_size => 1,
+            chunks => 1,
+            trailers => #{<<"x-check">> => <<"ok">>},
+            before_fin => BeforeFin
+        }
+    },
+    ?WITH(ServerOpts, pool_opts(Port, 2), Fun(ehttpc_pool:pick_worker(?POOL))).
+
+await_trailers() ->
+    receive
+        {trailers_ready, Server} -> Server
+    after 1_000 -> error(no_trailers)
+    end.
+
+request_trailers_async(Worker, Tag) ->
+    Tester = self(),
+    ehttpc:request_async(
+        Worker,
+        get,
+        req(),
+        1_000,
+        {
+            fun(Result) -> Tester ! {Tag, Result} end, []
+        }
+    ).
+
+assert_trailers_result(Tag) ->
+    receive
+        {Tag, Result} -> ?assertMatch({ok, 200, _, <<1>>}, Result)
+    after 1_000 -> error(trailers_callback_timeout)
+    end.
 
 data_chunked_test() ->
     Port = ?PORT,
