@@ -214,9 +214,10 @@ socket_send(
             _ ->
                 0
         end,
+    BeforeFin = maps:get(before_fin, maps:get(chunked, Opts, #{}), fun() -> ok end),
     case gen_tcp:send(Socket, Headers) of
         ok ->
-            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay) of
+            case socket_send_body_chunks(Socket, BodyChunks, ChunkedDelay, FinDelay, BeforeFin) of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -226,21 +227,21 @@ socket_send(
             {error, Reason}
     end.
 
-socket_send_body_chunks(_Socket, [], _, _) ->
+socket_send_body_chunks(_Socket, [], _, _, _) ->
     ok;
-socket_send_body_chunks(Socket, [H | T], Delay, FinDelay) ->
+socket_send_body_chunks(Socket, [H | T], Delay, FinDelay, BeforeFin) ->
     case gen_tcp:send(Socket, H) of
         ok ->
             %% maybe delya each chunk (when Delay > 0)
             timer:sleep(Delay),
             case T of
-                [_] when FinDelay > 0 ->
-                    %% delay the last chunk
-                    timer:sleep(FinDelay);
+                [_] ->
+                    BeforeFin(),
+                    FinDelay > 0 andalso timer:sleep(FinDelay);
                 _ ->
                     ok
             end,
-            socket_send_body_chunks(Socket, T, Delay, FinDelay);
+            socket_send_body_chunks(Socket, T, Delay, FinDelay, BeforeFin);
         {error, Reason} ->
             {error, Reason}
     end.
